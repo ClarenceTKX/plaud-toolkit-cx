@@ -1,6 +1,7 @@
 import type { App } from 'obsidian';
 import type { PlaudFile, PlaudFileDetail, TranscriptionResult } from '../types';
 import type { PlaudSettings } from '../settings';
+import { triadFolder, triadNotePath } from './triad';
 
 export class NoteFactory {
   constructor(private app: App) {}
@@ -12,9 +13,11 @@ export class NoteFactory {
     audioVaultPath: string,
     settings: PlaudSettings,
   ): Promise<string> {
-    await this.ensureFolder(settings.notesFolder);
+    // Triad model: note lives in the shared triad folder under a timestamp stem
+    // (`<ts>.md`), alongside its audio and optional `.llm.md`.
+    await this.ensureFolder(triadFolder(settings));
 
-    const notePath = `${settings.notesFolder}/${this.buildFilename(rec)}`;
+    const notePath = triadNotePath(rec, settings);
 
     if (this.app.vault.getAbstractFileByPath(notePath)) {
       return notePath;
@@ -29,14 +32,6 @@ export class NoteFactory {
 
     await this.app.vault.create(notePath, content);
     return notePath;
-  }
-
-  private buildFilename(rec: PlaudFile): string {
-    const date = epochMsToDate(rec.start_time);
-    const datePart = formatDate(date);
-    const timePart = formatTime(date);
-    const slug = slugify(rec.filename ?? rec.id);
-    return `${datePart}_${timePart}_${slug}.md`;
   }
 
   private renderTemplate(
@@ -104,13 +99,4 @@ function formatTimestamp(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function slugify(str: string): string {
-  return str
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .slice(0, 60);
 }

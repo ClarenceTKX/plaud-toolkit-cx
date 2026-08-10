@@ -1,0 +1,34 @@
+{
+  "applicationContextEnabled": false,
+  "duration": 167078,
+  "recordingDevice": "",
+  "literalPunctuationEnabled": false,
+  "systemAudioEnabled": false,
+  "promptContext": {
+    "systemContext": { "time": "", "language": "en" },
+    "modeContext": { "examples": [], "type": "custom", "language": "en" },
+    "applicationContext": { "name": "Superwhisper", "nouns": [], "includeInPrompt": false },
+    "userContext": {}
+  },
+  "result": "So we landed on those things. Then we mapped it back to the plan and agreed on the next steps. Thank you.",
+  "modelKey": "nvidia_parakeet-v3_494MB",
+  "translationEnabled": false,
+  "speakers": [],
+  "appVersion": "2.17.2",
+  "datetime": "2026-08-08T07:40:40",
+  "segments": [
+    { "text": " So we landed on those things.", "end": 3.04, "start": 1.36 },
+    { "text": " Then we mapped it back to the plan and agreed on the next steps.", "end": 9.36, "start": 3.04 },
+    { "text": " Thank you.", "end": 10.5, "start": 9.5 }
+  ],
+  "languageModelKey": "",
+  "modelName": "Parakeet Multilanguage",
+  "separateSpeakersEnabled": false,
+  "rawResult": " So we landed on those things. Um then we mapped it back to the plan and agreed on the next steps. Thank you.",
+  "processingTime": 1171,
+  "realtimeEnabled": false,
+  "prompt": "",
+  "languageSelected": "en",
+  "languageModelName": "",
+  "modeName": "Default"
+}

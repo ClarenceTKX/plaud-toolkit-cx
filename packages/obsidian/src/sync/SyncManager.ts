@@ -1,7 +1,20 @@
-import { Notice, normalizePath, TFile } from 'obsidian';
+import { Notice, normalizePath, TFile, Vault } from 'obsidian';
 import { join } from 'path';
 import type PlaudPlugin from '../../main';
 import type { PlaudFile, PlaudFileDetail, SyncStatus, TranscriptionResult } from '../types';
+import {
+  triadFolder,
+  triadAudioPath,
+  triadLlmPath,
+} from '../notes/triad';
+
+/**
+ * Marker appended to notes whose transcript is voice-only (Superwhisper
+ * produced no `llmResult`). The vault-access flow watches for this so it can
+ * proactively offer to run AI processing on the recording.
+ */
+export const AI_PENDING_MARKER =
+  '> [!todo] AI processing pending — Superwhisper returned a voice-only transcript (no AI result). Re-run this recording through an AI mode if you want a processed version.';
 
 export class SyncManager {
   private intervalId: number | null = null;
@@ -85,13 +98,13 @@ export class SyncManager {
       recordingId: rec.id,
     });
 
-    const audioFolder = this.plugin.settings.audioFolder;
-    await this.ensureVaultFolder(audioFolder);
+    // Triad model: all three artifacts share one folder + timestamp stem
+    // (derived internally by the triad path helpers from `rec`).
+    const folder = triadFolder(this.plugin.settings);
+    await this.ensureVaultFolder(folder);
 
     const ext = rec.fullname?.split('.').pop() ?? 'opus';
-    const datePrefix = toFileDatePrefix(rec.start_time);
-    const audioFilename = `${datePrefix}_${rec.id}.${ext}`;
-    const audioVaultPath = normalizePath(`${audioFolder}/${audioFilename}`);
+    const audioVaultPath = normalizePath(triadAudioPath(rec, this.plugin.settings, ext));
 
     if (!this.plugin.app.vault.getAbstractFileByPath(audioVaultPath)) {
       const buffer = await this.plugin.plaudClient.downloadAudioBuffer(rec.id);
@@ -102,8 +115,7 @@ export class SyncManager {
     let bestAudioPath = audioVaultPath;
 
     if (ext === 'opus') {
-      const mp3Filename = `${datePrefix}_${rec.id}.mp3`;
-      const mp3VaultPath = normalizePath(`${audioFolder}/${mp3Filename}`);
+      const mp3VaultPath = normalizePath(triadAudioPath(rec, this.plugin.settings, 'mp3'));
 
       if (this.plugin.app.vault.getAbstractFileByPath(mp3VaultPath)) {
         bestAudioPath = mp3VaultPath;
@@ -164,8 +176,8 @@ export class SyncManager {
           this.plugin.settings,
         );
       } catch (whisperErr: any) {
-        console.warn(`Plaud: Whisper failed for ${rec.id}, creating note without transcript.`, whisperErr);
-        transcription = { text: '*(Whisper transcription failed — check mlx_whisper path in settings.)*', segments: [] };
+        console.warn(`Plaud: Superwhisper failed for ${rec.id}, creating note without transcript.`, whisperErr);
+        transcription = { text: '*(Superwhisper transcription failed — check the Superwhisper app and recordings folder in settings.)*', segments: [] };
       }
     }
 
@@ -178,19 +190,21 @@ export class SyncManager {
       this.plugin.settings,
     );
 
-    // ── Rename note with best available context ────────────────────────
-    const context = deriveContext(detail, rec, transcription);
-    if (context) {
-      const noteFile = this.plugin.app.vault.getAbstractFileByPath(notePath);
-      if (noteFile) {
-        const date = epochMsToDate(rec.start_time).toISOString().slice(0, 10);
-        const newName = `${this.plugin.settings.notesFolder}/${date}_${context}.md`;
-        const normalized = normalizePath(newName);
-        if (normalized !== notePath && !this.plugin.app.vault.getAbstractFileByPath(normalized)) {
-          await this.plugin.app.vault.rename(noteFile, normalized);
-        }
-      }
-    }
+    // ── Write the AI-result file (only when Superwhisper produced one) ─────
+    // Voice-only results omit `<ts>.llm.md` entirely; the note still carries the
+    // AI-pending flag below so the vault CLAUDE.md flow can offer to process it.
+    await writeLlmSidecar(
+      this.plugin.app.vault,
+      triadLlmPath(rec, this.plugin.settings),
+      transcription,
+    );
+
+    // Flag voice-only Superwhisper results so the vault-access flow can
+    // proactively offer to run AI processing (no llmResult was present).
+    await annotateAiPending(this.plugin.app.vault, notePath, transcription);
+
+    // Note: no context-based rename — triad files are keyed by a stable
+    // timestamp stem (`<ts>.md/.llm.md/.<ext>`) so the three stay grouped.
 
     // Persist dedup
     this.plugin.settings.syncedIds.push(rec.id);
@@ -205,26 +219,33 @@ export class SyncManager {
    */
   async removeRecording(id: string, alsoRemote: boolean): Promise<void> {
     const vault = this.plugin.app.vault;
-    const { notesFolder, audioFolder } = this.plugin.settings;
+    const folder = triadFolder(this.plugin.settings);
 
-    // Find and delete the note file by scanning frontmatter for plaud_id
+    // Locate the note by scanning frontmatter for plaud_id, then delete the
+    // whole triad (note + audio + optional .llm.md) which shares the note's
+    // timestamp stem in the triad folder.
     const noteFiles = vault.getMarkdownFiles().filter(f =>
-      f.path.startsWith(notesFolder + '/'),
+      f.path.startsWith(folder + '/'),
     );
+    let stem: string | null = null;
     for (const file of noteFiles) {
       const cache = this.plugin.app.metadataCache.getFileCache(file);
       if (cache?.frontmatter?.plaud_id === id) {
+        stem = file.basename.replace(/\.llm$/, ''); // note basename is the stem
         await vault.trash(file, true);
         break;
       }
     }
 
-    // Find and delete audio files (.opus and .mp3 matching the ID)
-    const audioFiles = vault.getFiles().filter(f =>
-      f.path.startsWith(audioFolder + '/') && f.path.includes(id),
-    );
-    for (const file of audioFiles) {
-      await vault.trash(file, true);
+    // Delete all sibling triad files sharing the stem (audio + .llm.md).
+    if (stem) {
+      const siblings = vault.getFiles().filter(f =>
+        f.path.startsWith(folder + '/') &&
+        (f.basename === stem || f.basename === `${stem}.llm`),
+      );
+      for (const file of siblings) {
+        await vault.trash(file, true);
+      }
     }
 
     // Remove from syncedIds
@@ -278,11 +299,11 @@ export class SyncManager {
     }
 
     const vault = this.plugin.app.vault;
-    const { notesFolder, audioFolder } = this.plugin.settings;
+    const folder = triadFolder(this.plugin.settings);
 
-    // Find the note file
+    // Find the note file in the triad folder by plaud_id frontmatter.
     const noteFiles = vault.getMarkdownFiles().filter(f =>
-      f.path.startsWith(notesFolder + '/'),
+      f.path.startsWith(folder + '/'),
     );
     let file: TFile | undefined;
     for (const f of noteFiles) {
@@ -294,6 +315,9 @@ export class SyncManager {
       return;
     }
 
+    // The audio shares the note's timestamp stem in the triad folder.
+    const stem = file.basename;
+
     this.isSyncing = true;
     this.setStatus({ state: 'transcribing', message: `Re-transcribing "${file.basename}"…` });
 
@@ -304,20 +328,21 @@ export class SyncManager {
       if (hasRealTranscript(detail.transcript)) {
         transcription = parseServerTranscript(detail.transcript);
       } else {
-        // Find or download MP3
+        // Reuse the triad's audio if present, else download it into the triad.
         let mp3Path: string | null = null;
 
-        const existingMp3 = vault.getFiles().find(
-          f => f.path.startsWith(audioFolder) && f.extension === 'mp3' && f.path.includes(plaudId),
+        const existingAudio = vault.getFiles().find(
+          f => f.path.startsWith(folder + '/') &&
+               f.basename === stem &&
+               f.extension !== 'md',
         );
 
-        if (existingMp3) {
-          mp3Path = existingMp3.path;
+        if (existingAudio) {
+          mp3Path = existingAudio.path;
         } else {
           this.setStatus({ state: 'downloading', message: `Fetching MP3 for "${file.basename}"…` });
-          await this.ensureVaultFolder(audioFolder);
-          const mp3Filename = `retranscribe_${plaudId}.mp3`;
-          const mp3VaultPath = normalizePath(`${audioFolder}/${mp3Filename}`);
+          await this.ensureVaultFolder(folder);
+          const mp3VaultPath = normalizePath(`${folder}/${stem}.mp3`);
 
           try {
             const mp3Url = await this.plugin.plaudClient.getMp3TempUrl(plaudId);
@@ -371,6 +396,12 @@ export class SyncManager {
         }
 
         await vault.modify(file, newContent);
+        await writeLlmSidecar(
+          vault,
+          normalizePath(`${folder}/${stem}.llm.md`),
+          transcription,
+        );
+        await annotateAiPending(vault, file.path, transcription);
         new Notice(`Plaud: re-transcribed "${file.basename}".`);
       } else {
         new Notice('Plaud: no transcript available yet for this recording.');
@@ -405,16 +436,17 @@ export class SyncManager {
       'No MP3 version available yet',
       'No transcript available',
       'Whisper transcription failed',
+      'Superwhisper transcription failed',
     ];
 
     try {
       await this.plugin.authManager.ensureToken();
-      const notesFolder = this.plugin.settings.notesFolder;
-      const audioFolder = this.plugin.settings.audioFolder;
+      const folder = triadFolder(this.plugin.settings);
       const vault = this.plugin.app.vault;
 
+      // `.llm.md` sidecars are also `.md`; exclude them so we only scan notes.
       const noteFiles = vault.getFiles().filter(
-        f => f.path.startsWith(notesFolder) && f.extension === 'md',
+        f => f.path.startsWith(folder) && f.extension === 'md' && !f.name.endsWith('.llm.md'),
       );
 
       const pending: { file: TFile; plaudId: string }[] = [];
@@ -451,26 +483,27 @@ export class SyncManager {
           if (hasRealTranscript(detail.transcript)) {
             transcription = parseServerTranscript(detail.transcript);
           } else {
-            // Try to get an MP3 for local Whisper transcription
+            // Reuse the triad audio (shares the note's stem) or download it.
             let mp3Path: string | null = null;
+            const stem = file.basename;
 
-            // Check if MP3 already exists in vault
-            const existingMp3 = vault.getFiles().find(
-              f => f.path.startsWith(audioFolder) && f.extension === 'mp3' && f.path.includes(plaudId),
+            const existingAudio = vault.getFiles().find(
+              f => f.path.startsWith(folder + '/') &&
+                   f.basename === stem &&
+                   f.extension !== 'md',
             );
 
-            if (existingMp3) {
-              mp3Path = existingMp3.path;
+            if (existingAudio) {
+              mp3Path = existingAudio.path;
             } else {
-              // Try downloading MP3 from API
+              // Try downloading MP3 from API into the triad folder.
               this.setStatus({
                 state: 'downloading',
                 message: `(${i + 1}/${pending.length}) Fetching MP3 for "${file.basename}"…`,
               });
 
-              await this.ensureVaultFolder(audioFolder);
-              const mp3Filename = `retranscribe_${plaudId}.mp3`;
-              const mp3VaultPath = normalizePath(`${audioFolder}/${mp3Filename}`);
+              await this.ensureVaultFolder(folder);
+              const mp3VaultPath = normalizePath(`${folder}/${stem}.mp3`);
 
               try {
                 const mp3Url = await this.plugin.plaudClient.getMp3TempUrl(plaudId);
@@ -525,6 +558,12 @@ export class SyncManager {
             );
 
             await vault.modify(file, newContent);
+            await writeLlmSidecar(
+              vault,
+              normalizePath(`${folder}/${file.basename}.llm.md`),
+              transcription,
+            );
+            await annotateAiPending(vault, file.path, transcription);
             transcribed++;
           } else {
             skipped++;
@@ -578,74 +617,84 @@ function parseServerTranscript(raw: string): TranscriptionResult {
   return { text: fullText, segments };
 }
 
+/**
+ * Write the triad's `<ts>.llm.md` sidecar — but only when Superwhisper actually
+ * produced an AI result. Voice-only recordings omit the file entirely (per the
+ * triad spec); the note's AI-pending flag is what signals "not yet processed".
+ *
+ * When `llmProcessed` is true the transcription's `text` already holds the
+ * `llmResult` (the bridge prefers it), so we persist that here.
+ */
+async function writeLlmSidecar(
+  vault: Vault,
+  llmPath: string,
+  transcription: TranscriptionResult,
+): Promise<void> {
+  const llmProcessed = (transcription as { llmProcessed?: boolean }).llmProcessed;
+  if (llmProcessed !== true) return; // omit file for voice-only results
+
+  const text = transcription.text?.trim() ?? '';
+  if (!text || text.startsWith('*(')) return;
+
+  const normalized = normalizePath(llmPath);
+  const existing = vault.getAbstractFileByPath(normalized);
+  const body = `${text}\n`;
+  if (existing instanceof TFile) {
+    await vault.modify(existing, body);
+  } else {
+    await vault.create(normalized, body);
+  }
+}
+
+/**
+ * If a transcription came back voice-only (Superwhisper produced no LLM result),
+ * mark its note so the vault-access flow can offer to run AI processing.
+ *
+ * Adds `superwhisper_ai_processed: false` to frontmatter and appends a callout
+ * marker. Real transcripts (with an AI result) and placeholder notes are left
+ * untouched.
+ */
+async function annotateAiPending(
+  vault: Vault,
+  notePath: string,
+  transcription: TranscriptionResult,
+): Promise<void> {
+  // `llmProcessed` only exists on Superwhisper results; server/placeholder
+  // transcripts don't carry it, so this narrows to genuine voice-only cases.
+  const llmProcessed = (transcription as { llmProcessed?: boolean }).llmProcessed;
+  if (llmProcessed !== false) return;
+
+  // Skip placeholder/error transcripts — nothing to AI-process.
+  const text = transcription.text?.trim() ?? '';
+  if (!text || text.startsWith('*(')) return;
+
+  const file = vault.getAbstractFileByPath(notePath);
+  if (!(file instanceof TFile)) return;
+
+  let content = await vault.read(file);
+  if (content.includes(AI_PENDING_MARKER)) return; // idempotent
+
+  // Insert a frontmatter flag if the note has frontmatter.
+  if (content.startsWith('---\n')) {
+    const end = content.indexOf('\n---', 4);
+    if (end !== -1 && !/\nsuperwhisper_ai_processed:/.test(content.slice(0, end))) {
+      content =
+        content.slice(0, end) +
+        '\nsuperwhisper_ai_processed: false' +
+        content.slice(end);
+    }
+  }
+
+  // Append the human-readable marker at the end.
+  content = content.replace(/\s*$/, '\n\n') + AI_PENDING_MARKER + '\n';
+
+  await vault.modify(file, content);
+}
+
 function fmtTs(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function toFileDatePrefix(epochMs: number): string {
-  const d = new Date(epochMs);
-  if (isNaN(d.getTime())) return 'unknown';
-  const date = d.toISOString().slice(0, 10);
-  const time = d.toTimeString().slice(0, 5).replace(':', '');
-  return `${date}_${time}`;
-}
-
-function epochMsToDate(epochMs: number): Date {
-  const d = new Date(epochMs);
-  return isNaN(d.getTime()) ? new Date() : d;
-}
-
-/**
- * Derive a short contextual title from the transcript.
- * Only uses the transcript text — skips placeholder markers.
- */
-const MAX_CONTEXT_LEN = 60; // keep well under the 255-byte filename limit
-
-function deriveContext(
-  _detail: PlaudFileDetail,
-  _rec: PlaudFile,
-  transcription: TranscriptionResult,
-): string {
-  const text = transcription.text;
-  // Skip placeholder markers
-  if (!text || text.length < 20 || text.startsWith('*(')) return '';
-
-  // Skip non-transcript payloads (e.g. Plaud "marks" JSON returned before the
-  // real transcript is ready) — these aren't human-readable titles.
-  if (looksLikeJson(text)) return '';
-
-  // Collect the first ~200 chars of real text, stripping speaker labels and markdown
-  const lines = text.split('\n').filter(l => l.trim().length > 0);
-  let collected = '';
-  for (const line of lines) {
-    const clean = line
-      .replace(/^\[Speaker \d+\]\s*/, '')
-      .replace(/^#+\s*/, '')
-      .trim();
-    if (!clean) continue;
-    collected += (collected ? ' ' : '') + clean;
-    if (collected.length >= 200) break;
-  }
-
-  if (collected.length < 10) return '';
-
-  // Take first ~8 words for a concise title
-  const words = collected.split(/\s+/).slice(0, 8).join(' ');
-
-  // Clean up: drop characters that are illegal or noisy in filenames, collapse
-  // whitespace, trim trailing punctuation, and hard-cap the length so a
-  // pathological transcript can never produce an over-long filename.
-  const cleaned = words
-    .replace(/[\\/:*?"<>|[\]{}]/g, '')
-    .replace(/\s+/g, ' ')
-    .replace(/[.,;:!?]+$/, '')
-    .trim()
-    .slice(0, MAX_CONTEXT_LEN)
-    .trim();
-
-  return cleaned.length >= 10 ? cleaned : '';
 }
 
 /**

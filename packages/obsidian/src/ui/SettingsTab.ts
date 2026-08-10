@@ -1,25 +1,6 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type PlaudPlugin from '../../main';
 
-const WHISPER_LANGUAGES: Record<string, string> = {
-  auto: 'Auto-detect',
-  en: 'English',
-  zh: 'Chinese',
-  de: 'German',
-  es: 'Spanish',
-  fr: 'French',
-  ja: 'Japanese',
-  ko: 'Korean',
-  pt: 'Portuguese',
-  ru: 'Russian',
-  it: 'Italian',
-  nl: 'Dutch',
-  pl: 'Polish',
-  uk: 'Ukrainian',
-  ar: 'Arabic',
-  hi: 'Hindi',
-};
-
 export class SettingsTab extends PluginSettingTab {
   plugin: PlaudPlugin;
 
@@ -91,17 +72,26 @@ export class SettingsTab extends PluginSettingTab {
         }),
       );
 
-    // ── Transcription ────────────────────────────────────────────────────────
+    // ── Transcription (Superwhisper) ─────────────────────────────────────────
     containerEl.createEl('h2', { text: 'Transcription' });
 
+    const swHelp = containerEl.createEl('p', { cls: 'setting-item-description' });
+    swHelp.innerHTML =
+      'Local transcription is handled on-device by <a href="https://superwhisper.com">Superwhisper</a>. ' +
+      'Recordings are transcribed with Superwhisper’s <b>currently active mode</b>, so language and model ' +
+      'are chosen there rather than here. Requires the Superwhisper macOS app to be installed and running.';
+
     new Setting(containerEl)
-      .setName('mlx_whisper path')
-      .setDesc('Absolute path to the mlx_whisper CLI binary.')
+      .setName('Superwhisper recordings folder')
+      .setDesc(
+        'Absolute path to Superwhisper’s recordings folder. Leave empty to auto-detect ' +
+          '(~/superwhisper/recordings, then ~/Documents/superwhisper/recordings).',
+      )
       .addText(text => text
-        .setPlaceholder('/Users/tensor/Library/Python/3.9/bin/mlx_whisper')
-        .setValue(this.plugin.settings.pythonPath)
+        .setPlaceholder('~/superwhisper/recordings')
+        .setValue(this.plugin.settings.superwhisperRecordingsPath ?? '')
         .onChange(async value => {
-          this.plugin.settings.pythonPath = value.trim();
+          this.plugin.settings.superwhisperRecordingsPath = value.trim();
           await this.plugin.saveSettings();
         }),
       )
@@ -110,68 +100,46 @@ export class SettingsTab extends PluginSettingTab {
         .onClick(async () => {
           btn.setDisabled(true);
           const err = await this.plugin.whisperBridge.checkInstallation(
-            this.plugin.settings.pythonPath,
+            this.plugin.settings,
           );
           btn.setDisabled(false);
           if (err) {
-            new Notice(`mlx_whisper check failed:\n${err}`, 8000);
+            new Notice(`Superwhisper check failed:\n${err}`, 8000);
           } else {
-            new Notice('mlx_whisper is installed and working!');
+            new Notice('Superwhisper is installed and reachable!');
           }
         }),
       );
 
     new Setting(containerEl)
-      .setName('Whisper model')
-      .setDesc('HuggingFace model ID for mlx_whisper. Requires an Apple Silicon Mac.')
+      .setName('Transcription timeout (minutes)')
+      .setDesc('How long to wait for Superwhisper to finish transcribing before giving up.')
       .addText(text => text
-        .setPlaceholder('mlx-community/whisper-large-v3-mlx')
-        .setValue(this.plugin.settings.whisperModel)
+        .setPlaceholder('10')
+        .setValue(String(this.plugin.settings.superwhisperTimeoutMinutes ?? 10))
         .onChange(async value => {
-          this.plugin.settings.whisperModel = value.trim();
+          const n = Number(value.trim());
+          this.plugin.settings.superwhisperTimeoutMinutes =
+            Number.isFinite(n) && n > 0 ? n : 10;
           await this.plugin.saveSettings();
         }),
       );
-
-    new Setting(containerEl)
-      .setName('Language')
-      .setDesc('Transcription language. Auto-detect is recommended.')
-      .addDropdown(drop => {
-        for (const [code, label] of Object.entries(WHISPER_LANGUAGES)) {
-          drop.addOption(code, label);
-        }
-        drop
-          .setValue(this.plugin.settings.whisperLanguage)
-          .onChange(async value => {
-            this.plugin.settings.whisperLanguage = value;
-            await this.plugin.saveSettings();
-          });
-        return drop;
-      });
 
     // ── Storage ──────────────────────────────────────────────────────────────
     containerEl.createEl('h2', { text: 'Storage' });
 
     new Setting(containerEl)
-      .setName('Audio folder')
-      .setDesc('Vault path where downloaded MP3 files are saved.')
+      .setName('Triad folder')
+      .setDesc(
+        'Single vault folder holding each recording’s triad — the transcript note ' +
+          '(<timestamp>.md), the audio passed to Superwhisper (<timestamp>.<ext>), and, ' +
+          'when Superwhisper produced one, the AI result (<timestamp>.llm.md).',
+      )
       .addText(text => text
-        .setPlaceholder('Plaud/Audio')
-        .setValue(this.plugin.settings.audioFolder)
+        .setPlaceholder('__Support/Plaud')
+        .setValue(this.plugin.settings.triadFolder)
         .onChange(async value => {
-          this.plugin.settings.audioFolder = value.trim();
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName('Notes folder')
-      .setDesc('Vault path where transcription notes are created.')
-      .addText(text => text
-        .setPlaceholder('Plaud/Notes')
-        .setValue(this.plugin.settings.notesFolder)
-        .onChange(async value => {
-          this.plugin.settings.notesFolder = value.trim();
+          this.plugin.settings.triadFolder = value.trim();
           await this.plugin.saveSettings();
         }),
       );

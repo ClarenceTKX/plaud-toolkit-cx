@@ -3,7 +3,7 @@
   "name": "Plaud Pin Sync",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "Sync audio recordings from Plaud Pin, transcribe locally with whisper-mlx, and create structured notes.",
+  "description": "Sync audio recordings from Plaud Pin, transcribe on-device with Superwhisper, and create structured notes.",
   "author": "",
   "authorUrl": "",
   "fundingUrl": "",

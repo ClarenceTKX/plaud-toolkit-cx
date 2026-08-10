@@ -13,7 +13,7 @@ This toolkit gives you programmatic access to your own recordings. Download audi
 - **`@plaud/core`** — Shared library: authentication, API client, config management. Handles token lifecycle automatically (tokens last ~300 days, auto-refresh when within 30 days of expiry). Requests run through a pluggable HTTP transport (Node `fetch` by default; the Obsidian plugin injects `requestUrl` to bypass renderer CORS).
 - **`@plaud/cli`** — Command-line tool to list, download, transcribe, and sync recordings.
 - **`@plaud/mcp`** — [MCP server](https://modelcontextprotocol.io/) that exposes your Plaud recordings to AI assistants like Claude, making your voice notes searchable and accessible from any MCP-compatible tool.
-- **`@plaud/obsidian`** — Obsidian plugin ("Plaud Pin Sync") that syncs recordings into your vault as Markdown notes, downloads the audio, and transcribes locally with [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper).
+- **`@plaud/obsidian`** — Obsidian plugin ("Plaud Pin Sync") that syncs recordings into your vault as Markdown notes, downloads the audio, and transcribes on-device with [Superwhisper](https://superwhisper.com).
 
 ## Setup
 
@@ -72,14 +72,17 @@ Tools available:
 
 ### 4. Obsidian Plugin
 
-The `@plaud/obsidian` package is an Obsidian plugin ("Plaud Pin Sync") that pulls new recordings into your vault on a schedule. For each recording it downloads the audio, transcribes it (using Plaud's server transcript when available, otherwise locally via [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)), and writes a Markdown note with frontmatter, transcript, and timestamps.
+The `@plaud/obsidian` package is an Obsidian plugin ("Plaud Pin Sync") that pulls new recordings into your vault on a schedule. For each recording it downloads the audio, transcribes it (using Plaud's server transcript when available, otherwise on-device via [Superwhisper](https://superwhisper.com)), and writes a Markdown note with frontmatter, transcript, and timestamps.
 
-**Requirements:** macOS on Apple Silicon, and `mlx_whisper` installed for local transcription:
+Each synced recording is stored as a **triad** in a single shared folder, keyed by a per-recording timestamp so the files group together:
 
-```bash
-python3 -m venv ~/.mlx-whisper-venv
-~/.mlx-whisper-venv/bin/pip install mlx-whisper
-```
+- `<timestamp>.md` — the transcript note (frontmatter carries `plaud_id`)
+- `<timestamp>.<ext>` — the audio that was passed to Superwhisper
+- `<timestamp>.llm.md` — Superwhisper's AI-processed result, **only when an AI mode produced one**
+
+For local transcription the plugin hands the audio to Superwhisper (`open <file> -a superwhisper`), then watches Superwhisper's recordings folder for the resulting `meta.json`. It prefers the AI result (`llmResult`) and falls back to the raw voice transcript (`result`). When a recording is transcribed by a voice-only mode (no `llmResult`), the note is flagged `superwhisper_ai_processed: false` with an "AI processing pending" callout, and no `.llm.md` is written.
+
+**Requirements:** macOS, and the [Superwhisper](https://superwhisper.com) app installed and running. Transcription behaviour (language, model, AI processing) is governed by Superwhisper's **currently active mode**, not by plugin settings — set your preferred mode active in Superwhisper before syncing.
 
 **Install into a vault** (builds the plugin and symlinks it in):
 
@@ -90,7 +93,15 @@ npm run build:plugin
 
 Then enable **Plaud Pin Sync** in Obsidian's community-plugins settings. Because it shares `@plaud/core`, the plugin uses the same credentials from `~/.plaud/config.json` — run `plaud login` first.
 
-Configure region, the `mlx_whisper` path, model, sync interval, and the audio/notes folders in the plugin's settings tab. Defaults: notes in `Plaud/Notes`, audio in `Plaud/Audio`, sync every 60 minutes. Manual commands are also available from the command palette ("Sync Plaud recordings", "Retranscribe pending recordings").
+In the plugin's settings tab you can configure:
+
+- **Plaud region** — `us` or `eu`.
+- **Superwhisper recordings folder** — where Superwhisper writes results. Leave empty to auto-detect (`~/superwhisper/recordings`, then the legacy `~/Documents/superwhisper/recordings`). A **Check** button verifies the app is installed and the folder exists.
+- **Transcription timeout (minutes)** — how long to wait for Superwhisper to finish before giving up (default 10).
+- **Triad folder** — the single vault folder that holds each recording's triad (default `__Support/Plaud`).
+- **Auto-sync interval** — default every 60 minutes; set to Manual to disable.
+
+Manual commands are also available from the command palette ("Sync Plaud recordings", "Retranscribe pending recordings", "Re-transcribe current note").
 
 > Updating the plugin later: `git pull && npm run build:plugin` — the symlink picks up the new build; just reload the plugin (or Obsidian).
 
