@@ -1,10 +1,11 @@
-import { PlaudConfig, PlaudAuth, PlaudClient } from '@plaud/core';
+import { PlaudConfig, PlaudAuth, PlaudClient, fetchRequester } from '@plaud/core';
 
 function createClient(): PlaudClient {
   const config = new PlaudConfig();
   const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  return new PlaudClient(auth, creds?.region ?? 'eu');
+  // Pass config so a region auto-correction persists back to ~/.plaud/config.json.
+  return new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
 }
 
 export async function listCommand(_args: string[]): Promise<void> {

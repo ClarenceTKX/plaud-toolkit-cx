@@ -33,12 +33,22 @@ export class PlaudClient {
   private plugin: PlaudPlugin;
   private core: CoreClient;
   private auth: PlaudAuth;
+  private config: PlaudConfig;
 
   constructor(plugin: PlaudPlugin) {
     this.plugin = plugin;
-    const config = new PlaudConfig();
-    this.auth = new PlaudAuth(config, obsidianRequester);
-    this.core = new CoreClient(this.auth, plugin.settings.plaudRegion, obsidianRequester);
+    // Single source of truth: the CLI-managed ~/.plaud/config.json. Region is
+    // read from there (not a plugin setting) and passed into core so any region
+    // mismatch auto-corrects and persists back to the shared config.
+    this.config = new PlaudConfig();
+    this.auth = new PlaudAuth(this.config, obsidianRequester);
+    const region = this.config.getCredentials()?.region ?? 'eu';
+    this.core = new CoreClient(this.auth, region, obsidianRequester, this.config);
+  }
+
+  /** Current region from the shared config (defaults to eu). */
+  private get region(): 'us' | 'eu' {
+    return this.config.getCredentials()?.region ?? 'eu';
   }
 
   async listRecordings(): Promise<PlaudRecording[]> {
@@ -86,7 +96,7 @@ export class PlaudClient {
    */
   async trashRecording(id: string): Promise<boolean> {
     const token = await this.auth.getToken();
-    const baseUrl = this.plugin.settings.plaudRegion === 'eu'
+    const baseUrl = this.region === 'eu'
       ? 'https://api-euc1.plaud.ai'
       : 'https://api.plaud.ai';
     const headers = {

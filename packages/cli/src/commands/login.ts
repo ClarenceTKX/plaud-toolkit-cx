@@ -9,17 +9,18 @@ export async function loginCommand(_args: string[]): Promise<void> {
   try {
     const email = await ask('Plaud email: ');
     const password = await ask('Password: ');
-    const regionInput = await ask('Region (us/eu) [eu]: ');
-    const region = (regionInput.trim() || 'eu') as 'us' | 'eu';
 
     const config = new PlaudConfig();
-    config.saveCredentials({ email: email.trim(), password, region });
+    // Region is auto-detected during login — default to 'eu' and let PlaudAuth
+    // fall back to the correct region, persisting whichever one works.
+    config.saveCredentials({ email: email.trim(), password, region: 'eu' });
 
-    console.log('Credentials saved. Verifying...');
+    console.log('Credentials saved. Verifying (auto-detecting region)…');
 
     const auth = new PlaudAuth(config);
-    const token = await auth.login();
-    console.log(`Login successful! Token valid for ~300 days.`);
+    await auth.login();
+    const region = config.getCredentials()?.region ?? 'eu';
+    console.log(`Login successful (region: ${region}). Token valid for ~300 days.`);
   } finally {
     rl.close();
   }

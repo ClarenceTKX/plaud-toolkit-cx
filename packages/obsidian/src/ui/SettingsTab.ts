@@ -61,15 +61,13 @@ export class SettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Plaud region')
-      .setDesc('Select the API region for your Plaud account.')
-      .addDropdown(drop => drop
-        .addOption('us', 'US (api.plaud.ai)')
-        .addOption('eu', 'EU (api-euc1.plaud.ai)')
-        .setValue(this.plugin.settings.plaudRegion)
-        .onChange(async value => {
-          this.plugin.settings.plaudRegion = value as 'us' | 'eu';
-          await this.plugin.saveSettings();
-        }),
+      .setDesc(
+        'Detected automatically from your CLI credentials (~/.plaud/config.json) ' +
+          'and self-corrects on mismatch — no need to set it here.',
+      )
+      .addText(text => text
+        .setValue(this.plugin.authManager.getRegion().toUpperCase())
+        .setDisabled(true),
       );
 
     // ── Transcription (Superwhisper) ─────────────────────────────────────────

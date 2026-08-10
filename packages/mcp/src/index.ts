@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { PlaudConfig, PlaudAuth, PlaudClient } from '@plaud/core';
+import { PlaudConfig, PlaudAuth, PlaudClient, fetchRequester } from '@plaud/core';
 
 async function main() {
   const config = new PlaudConfig();
@@ -14,7 +14,7 @@ async function main() {
   }
 
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds.region);
+  const client = new PlaudClient(auth, creds.region, fetchRequester, config);
 
   const server = new McpServer({
     name: 'plaud-mcp',

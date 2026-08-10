@@ -27,11 +27,40 @@ export class PlaudAuth {
       throw new Error('No credentials configured. Run `plaud login` first.');
     }
 
-    const baseUrl = BASE_URLS[creds.region] ?? BASE_URLS['us'];
-    const body = new URLSearchParams({
-      username: creds.email,
-      password: creds.password,
-    });
+    // Auto-detect region: try the configured region first, then fall back to
+    // the other one. Whichever succeeds is persisted, so the user never has to
+    // know or pick their account's region correctly.
+    const configured = (creds.region === 'us' || creds.region === 'eu') ? creds.region : 'eu';
+    const order: Array<'us' | 'eu'> = configured === 'eu' ? ['eu', 'us'] : ['us', 'eu'];
+
+    let lastError: Error | null = null;
+    for (const region of order) {
+      try {
+        const token = await this.loginToRegion(creds.email, creds.password, region);
+        // Persist the region that actually worked (if it changed).
+        if (creds.region !== region) {
+          this.config.saveCredentials({ ...creds, region });
+        }
+        return token;
+      } catch (err: any) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        // Only fall through to the other region on a region-type rejection or
+        // network error; a genuine bad-password error should surface as-is.
+        if (!isRegionOrNetworkError(lastError)) throw lastError;
+      }
+    }
+
+    throw lastError ?? new Error('Login failed for all known regions.');
+  }
+
+  /** Attempt login against a single region's endpoint. Returns the access token. */
+  private async loginToRegion(
+    email: string,
+    password: string,
+    region: 'us' | 'eu',
+  ): Promise<string> {
+    const baseUrl = BASE_URLS[region] ?? BASE_URLS['us'];
+    const body = new URLSearchParams({ username: email, password });
 
     const res = await this.requester({
       url: `${baseUrl}/auth/access-token`,
@@ -73,4 +102,22 @@ export class PlaudAuth {
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
     return { iat: payload.iat ?? 0, exp: payload.exp ?? 0 };
   }
+}
+
+/**
+ * Should a failed login attempt fall through to the other region? Yes for
+ * region-type rejections and transient network/DNS errors; no for a genuine
+ * credential failure (which we want to surface immediately, unchanged).
+ */
+function isRegionOrNetworkError(err: Error): boolean {
+  const msg = err.message.toLowerCase();
+  if (msg.includes('region')) return true;
+  // Network/DNS/connection issues — worth trying the other endpoint.
+  if (/(fetch failed|network|enotfound|econnrefused|etimedout|timeout|getaddrinfo)/.test(msg)) {
+    return true;
+  }
+  // A clear bad-credentials message should NOT trigger a region fallback.
+  if (/(password|credential|unauthorized|invalid|incorrect)/.test(msg)) return false;
+  // Ambiguous status-code failures: allow one cross-region retry.
+  return msg.includes('login failed');
 }

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { PlaudConfig, PlaudAuth, PlaudClient } from '@plaud/core';
+import { PlaudConfig, PlaudAuth, PlaudClient, fetchRequester } from '@plaud/core';
 
 export async function syncCommand(args: string[]): Promise<void> {
   const folder = args[0];
@@ -12,7 +12,7 @@ export async function syncCommand(args: string[]): Promise<void> {
   const config = new PlaudConfig();
   const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds?.region ?? 'eu');
+  const client = new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
 
   fs.mkdirSync(folder, { recursive: true });
 

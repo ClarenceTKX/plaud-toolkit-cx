@@ -2,22 +2,39 @@ import { PlaudAuth } from './auth.js';
 import { BASE_URLS, fetchRequester } from './types.js';
 import type { PlaudRecording, PlaudRecordingDetail, PlaudUserInfo, Requester } from './types.js';
 
+/** Minimal config surface the client needs to persist a corrected region. */
+export interface RegionStore {
+  getCredentials(): { email: string; password: string; region: 'us' | 'eu' } | undefined;
+  saveCredentials(credentials: { email: string; password: string; region: 'us' | 'eu' }): void;
+}
+
 export class PlaudClient {
   private auth: PlaudAuth;
   private region: string;
   private requester: Requester;
+  private config?: RegionStore;
 
-  constructor(auth: PlaudAuth, region: string = 'us', requester: Requester = fetchRequester) {
+  constructor(
+    auth: PlaudAuth,
+    region: string = 'us',
+    requester: Requester = fetchRequester,
+    config?: RegionStore,
+  ) {
     this.auth = auth;
     this.region = region;
     this.requester = requester;
+    this.config = config;
   }
 
   private get baseUrl(): string {
     return BASE_URLS[this.region] ?? BASE_URLS['us'];
   }
 
-  private async request(path: string, options?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<any> {
+  private async request(
+    path: string,
+    options?: { method?: string; headers?: Record<string, string>; body?: string },
+    retriedRegions: Set<string> = new Set(),
+  ): Promise<any> {
     const token = await this.auth.getToken();
     const url = `${this.baseUrl}${path}`;
     const res = await this.requester({
@@ -37,14 +54,52 @@ export class PlaudClient {
 
     const data = await res.json();
 
-    // Handle region mismatch
-    if (data?.status === -302 && data?.data?.domains?.api) {
-      const domain: string = data.data.domains.api;
-      this.region = domain.includes('euc1') ? 'eu' : 'us';
-      return this.request(path, options);
+    // ── Region mismatch auto-recovery ─────────────────────────────────────
+    // Plaud rejects requests sent to the wrong regional endpoint. This can
+    // arrive in a few shapes: a -302 status (sometimes with the correct domain
+    // in data.domains.api, sometimes without), or a plain error message like
+    // "user region mismatch". In every case: pick the right region, persist it,
+    // and retry — guarding against retrying the same region twice.
+    if (isRegionMismatch(data)) {
+      const nextRegion = this.resolveMismatchRegion(data);
+      if (nextRegion && nextRegion !== this.region && !retriedRegions.has(nextRegion)) {
+        retriedRegions.add(this.region);
+        this.setRegion(nextRegion);
+        return this.request(path, options, retriedRegions);
+      }
+      // Couldn't resolve a new region to try — surface a clear, actionable error.
+      const msg = data?.msg ?? data?.message ?? 'user region mismatch';
+      throw new Error(
+        `Plaud region mismatch and auto-correction failed (${msg}). ` +
+          `Your account's region differs from the configured one; re-run \`plaud login\` and pick the other region (us/eu).`,
+      );
     }
 
     return data;
+  }
+
+  /**
+   * Choose the region to switch to on a mismatch. Prefer the domain Plaud
+   * hands back; otherwise just toggle to the opposite of the current region.
+   */
+  private resolveMismatchRegion(data: any): 'us' | 'eu' | null {
+    const domain: string | undefined = data?.data?.domains?.api ?? data?.domains?.api;
+    if (typeof domain === 'string' && domain.length > 0) {
+      return domain.includes('euc1') ? 'eu' : 'us';
+    }
+    // No domain hint — flip to the other known region.
+    if (this.region === 'eu') return 'us';
+    if (this.region === 'us') return 'eu';
+    return null;
+  }
+
+  /** Switch the in-memory region and persist it to config when available. */
+  private setRegion(region: 'us' | 'eu'): void {
+    this.region = region;
+    const creds = this.config?.getCredentials?.();
+    if (creds && creds.region !== region) {
+      this.config!.saveCredentials({ ...creds, region });
+    }
   }
 
   async listRecordings(): Promise<PlaudRecording[]> {
@@ -102,4 +157,14 @@ export class PlaudClient {
       return null;
     }
   }
+}
+
+/**
+ * Detect a region-mismatch response across the shapes Plaud returns it in:
+ * the `-302` status code, or an error message mentioning a region mismatch.
+ */
+function isRegionMismatch(data: any): boolean {
+  if (data?.status === -302) return true;
+  const msg = String(data?.msg ?? data?.message ?? '').toLowerCase();
+  return msg.includes('region mismatch') || msg.includes('user region');
 }

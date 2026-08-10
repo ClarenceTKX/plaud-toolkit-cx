@@ -1,5 +1,10 @@
 export interface PlaudSettings {
-  plaudRegion: 'us' | 'eu';
+  /**
+   * @deprecated Region now comes from the CLI-managed ~/.plaud/config.json
+   * (single source of truth) and auto-corrects on mismatch. Kept optional so
+   * existing plugin data.json still loads; no longer read.
+   */
+  plaudRegion?: 'us' | 'eu';
   /**
    * Absolute path to Superwhisper's recordings folder. Superwhisper writes one
    * timestamped subfolder per transcription, each containing a `meta.json`.
@@ -35,7 +40,6 @@ export interface PlaudSettings {
 }
 
 export const DEFAULT_SETTINGS: PlaudSettings = {
-  plaudRegion: 'eu',
   superwhisperRecordingsPath: '',
   superwhisperTimeoutMinutes: 10,
   triadFolder: '__Support/Plaud',
