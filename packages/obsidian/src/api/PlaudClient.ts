@@ -42,13 +42,12 @@ export class PlaudClient {
     // mismatch auto-corrects and persists back to the shared config.
     this.config = new PlaudConfig();
     this.auth = new PlaudAuth(this.config, obsidianRequester);
-    const region = this.config.getCredentials()?.region ?? 'eu';
-    this.core = new CoreClient(this.auth, region, obsidianRequester, this.config);
+    this.core = new CoreClient(this.auth, this.config.getRegion(), obsidianRequester, this.config);
   }
 
-  /** Current region from the shared config (defaults to eu). */
+  /** Current region from the shared config (passkey JWT or creds; defaults to eu). */
   private get region(): 'us' | 'eu' {
-    return this.config.getCredentials()?.region ?? 'eu';
+    return this.config.getRegion();
   }
 
   async listRecordings(): Promise<PlaudRecording[]> {

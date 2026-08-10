@@ -91,7 +91,8 @@ describe('PlaudAuth', () => {
     const emptyConfig = new PlaudConfig(emptyDir);
     const emptyAuth = new PlaudAuth(emptyConfig);
 
-    await expect(emptyAuth.getToken()).rejects.toThrow('No credentials');
+    // No token and no email/password creds → clear error pointing at `plaud login`.
+    await expect(emptyAuth.getToken()).rejects.toThrow(/token missing or expired|plaud login/i);
     fs.rmSync(emptyDir, { recursive: true, force: true });
   });
 

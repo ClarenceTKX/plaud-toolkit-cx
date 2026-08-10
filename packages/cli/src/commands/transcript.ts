@@ -8,14 +8,13 @@ export async function transcriptCommand(args: string[]): Promise<void> {
   }
 
   const config = new PlaudConfig();
-  const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
+  const client = new PlaudClient(auth, config, fetchRequester);
 
   const detail = await client.getRecording(id);
 
-  if (detail.transcript && detail.transcript.length > 0) {
-    console.log(detail.transcript);
+  if (detail.transcriptText && detail.transcriptText.length > 0) {
+    console.log(detail.transcriptText);
   } else {
     console.log('No transcript available for this recording.');
   }

@@ -16,9 +16,23 @@ export interface PlaudConfig {
   token?: PlaudTokenData;
 }
 
+/**
+ * Default base for Plaud's current platform API (the same one `@plaud-ai/cli`
+ * uses). All personal-recording endpoints live under `/open/third-party/…`.
+ */
+export const DEFAULT_API_BASE = 'https://platform.plaud.ai/developer/api';
+
+/** OAuth token + refresh endpoints (used by the passkey CLI flow). */
+export const DEFAULT_TOKEN_URL = `${DEFAULT_API_BASE}/oauth/third-party/access-token`;
+export const DEFAULT_REFRESH_URL = `${DEFAULT_API_BASE}/oauth/third-party/access-token/refresh`;
+
+/**
+ * @deprecated The API is no longer split by us/eu region — everything is served
+ * from the single platform base. Retained only so older imports still resolve.
+ */
 export const BASE_URLS: Record<string, string> = {
-  us: 'https://api.plaud.ai',
-  eu: 'https://api-euc1.plaud.ai',
+  us: DEFAULT_API_BASE,
+  eu: DEFAULT_API_BASE,
 };
 
 // Plaud's API rejects requests with the default Node.js fetch User-Agent
@@ -60,24 +74,50 @@ export const fetchRequester: Requester = async (req) => {
   };
 };
 
+/**
+ * A recording as returned by the platform API (`/open/third-party/files`).
+ * Canonical fields follow the documented schema (name/created_at/duration/…);
+ * legacy fields (filename/start_time/…) are kept optional and populated by the
+ * client so existing consumers keep working during the migration.
+ */
 export interface PlaudRecording {
   id: string;
-  filename: string;
-  fullname: string;
-  filesize: number;
+  /** Recording name (canonical). */
+  name: string;
+  /** Creation time, ISO 8601 (canonical). */
+  created_at: string;
+  /** Length of the recording, in **milliseconds** (platform API). */
   duration: number;
-  start_time: number;
-  end_time: number;
-  is_trash: boolean;
-  is_trans: boolean;
-  is_summary: boolean;
-  keywords: string[];
-  serial_number: string;
+  /** Recording start time, ISO 8601. */
+  start_at?: string;
+  serial_number?: string;
+  /** Availability flags (detail responses). */
+  audio?: boolean;
+  transcript?: boolean;
+  summary?: boolean;
+
+  // ── Legacy compatibility (populated by the client from the new fields) ──
+  /** @deprecated use `name`. */
+  filename?: string;
+  /** @deprecated original file name incl. extension, when known. */
+  fullname?: string;
+  /** @deprecated use `created_at`/`start_at` (epoch ms mirror of start). */
+  start_time?: number;
+  /** @deprecated */
+  is_trash?: boolean;
+  /** @deprecated use boolean `transcript`. */
+  is_trans?: boolean;
+  /** @deprecated use boolean `summary`. */
+  is_summary?: boolean;
 }
 
 export interface PlaudRecordingDetail extends PlaudRecording {
-  transcript: string;
-  summary?: string;
+  /** Temporary presigned S3 URL for the MP3 (valid ~24h), when available. */
+  presigned_url?: string;
+  /** Full transcript text (empty string when not available). */
+  transcriptText?: string;
+  /** AI summary markdown, when available. */
+  summaryText?: string;
 }
 
 export interface PlaudUserInfo {

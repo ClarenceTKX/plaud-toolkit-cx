@@ -159,8 +159,8 @@ export class SyncManager {
 
     let transcription: TranscriptionResult;
 
-    if (hasRealTranscript(detail.transcript)) {
-      transcription = parseServerTranscript(detail.transcript);
+    if (hasRealTranscript(detail.transcriptText)) {
+      transcription = parseServerTranscript(detail.transcriptText!);
     } else if (bestAudioPath.endsWith('.opus')) {
       // Still only have the encrypted .opus — can't transcribe
       transcription = {
@@ -325,8 +325,8 @@ export class SyncManager {
       const detail = await this.plugin.plaudClient.getRecordingDetail(plaudId);
       let transcription: TranscriptionResult | null = null;
 
-      if (hasRealTranscript(detail.transcript)) {
-        transcription = parseServerTranscript(detail.transcript);
+      if (hasRealTranscript(detail.transcriptText)) {
+        transcription = parseServerTranscript(detail.transcriptText!);
       } else {
         // Reuse the triad's audio if present, else download it into the triad.
         let mp3Path: string | null = null;
@@ -480,8 +480,8 @@ export class SyncManager {
           const detail = await this.plugin.plaudClient.getRecordingDetail(plaudId);
           let transcription: TranscriptionResult | null = null;
 
-          if (hasRealTranscript(detail.transcript)) {
-            transcription = parseServerTranscript(detail.transcript);
+          if (hasRealTranscript(detail.transcriptText)) {
+            transcription = parseServerTranscript(detail.transcriptText!);
           } else {
             // Reuse the triad audio (shares the note's stem) or download it.
             let mp3Path: string | null = null;

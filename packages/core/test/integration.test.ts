@@ -4,13 +4,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const HAS_CREDS = fs.existsSync(path.join(os.homedir(), '.plaud', 'config.json'));
+// Authenticated if either the passkey tokens.json or legacy config.json exists.
+const HAS_AUTH =
+  fs.existsSync(path.join(os.homedir(), '.plaud', 'tokens.json')) ||
+  fs.existsSync(path.join(os.homedir(), '.plaud', 'config.json'));
 
-describe.skipIf(!HAS_CREDS)('integration (live API)', () => {
+describe.skipIf(!HAS_AUTH)('integration (live API)', () => {
   const config = new PlaudConfig();
-  const creds = config.getCredentials()!;
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds?.region ?? 'eu');
+  const client = new PlaudClient(auth, config);
 
   it('gets user info', async () => {
     const user = await client.getUserInfo();

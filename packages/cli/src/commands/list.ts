@@ -2,10 +2,9 @@ import { PlaudConfig, PlaudAuth, PlaudClient, fetchRequester } from '@plaud/core
 
 function createClient(): PlaudClient {
   const config = new PlaudConfig();
-  const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  // Pass config so a region auto-correction persists back to ~/.plaud/config.json.
-  return new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
+  // Base URL resolves from PLAUD_API_BASE / ~/.plaud/cli.yaml / default.
+  return new PlaudClient(auth, config, fetchRequester);
 }
 
 export async function listCommand(_args: string[]): Promise<void> {
@@ -18,10 +17,11 @@ export async function listCommand(_args: string[]): Promise<void> {
   }
 
   for (const rec of recordings) {
-    const date = new Date(rec.start_time).toISOString().slice(0, 16).replace('T', ' ');
+    const iso = rec.start_at ?? rec.created_at ?? '';
+    const date = iso ? iso.slice(0, 16).replace('T', ' ') : '????-??-?? ??:??';
+    // duration is milliseconds
     const dur = rec.duration ? `${Math.round(rec.duration / 60000)}m` : '?';
-    const flags = [rec.is_trans ? 'T' : '', rec.is_summary ? 'S' : ''].filter(Boolean).join('');
-    console.log(`${rec.id}  ${date}  ${dur.padStart(4)}  ${flags.padEnd(2)}  ${rec.filename}`);
+    console.log(`${rec.id}  ${date}  ${dur.padStart(4)}  ${rec.name}`);
   }
 
   console.log(`\n${recordings.length} recording(s)`);

@@ -6,15 +6,15 @@ import { PlaudConfig, PlaudAuth, PlaudClient, fetchRequester } from '@plaud/core
 
 async function main() {
   const config = new PlaudConfig();
-  const creds = config.getCredentials();
 
-  if (!creds) {
-    console.error('No Plaud credentials found. Run `plaud login` first.');
+  // Accept either auth source: passkey tokens.json or email/password config.json.
+  if (!config.getToken() && !config.getCredentials()) {
+    console.error('No Plaud authentication found. Run `plaud login` first (writes ~/.plaud/tokens.json).');
     process.exit(1);
   }
 
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds.region, fetchRequester, config);
+  const client = new PlaudClient(auth, config, fetchRequester);
 
   const server = new McpServer({
     name: 'plaud-mcp',
@@ -27,17 +27,16 @@ async function main() {
     const recs = await client.listRecordings();
     const result = recs.map(r => ({
       id: r.id,
-      title: r.filename,
-      date: new Date(r.start_time).toISOString().slice(0, 16),
-      duration_minutes: Math.round(r.duration / 60000),
-      has_transcript: r.is_trans,
+      title: r.name,
+      date: (r.start_at ?? r.created_at ?? '').slice(0, 16),
+      duration_minutes: Math.round(r.duration / 60000), // duration is ms
     }));
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   });
 
   server.tool('plaud_get_transcript', 'Get the transcript of a Plaud recording by ID.', recordingIdSchema, async (params) => {
     const detail = await client.getRecording(params.recording_id);
-    const result = { id: detail.id, title: detail.filename, transcript: detail.transcript || 'No transcript available.' };
+    const result = { id: detail.id, title: detail.name, transcript: detail.transcriptText || 'No transcript available.' };
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   });
 

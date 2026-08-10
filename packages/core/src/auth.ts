@@ -15,10 +15,32 @@ export class PlaudAuth {
 
   async getToken(): Promise<string> {
     const cached = this.config.getToken();
+
+    // A still-valid token (from either config.json or the passkey CLI's
+    // tokens.json) is used as-is.
     if (cached && !this.isExpiringSoon(cached)) {
       return cached.accessToken;
     }
-    return this.login();
+
+    // Token missing or expiring. If we have email/password credentials, do a
+    // full login (with region auto-detect). Otherwise we're on the passkey
+    // flow — there's nothing to log in with here.
+    const creds = this.config.getCredentials();
+    if (creds) {
+      return this.login();
+    }
+
+    // Passkey users: we can still use a present-but-expiring access token until
+    // it actually lapses (better than failing outright). Once truly expired,
+    // instruct them to re-run Plaud's browser login.
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.accessToken;
+    }
+
+    throw new Error(
+      'Plaud token missing or expired, and no email/password credentials are stored. ' +
+        'Re-run Plaud\'s CLI login (`plaud login`) to refresh ~/.plaud/tokens.json.',
+    );
   }
 
   async login(): Promise<string> {

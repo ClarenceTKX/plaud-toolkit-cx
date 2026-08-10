@@ -11,9 +11,8 @@ export async function downloadCommand(args: string[]): Promise<void> {
   }
 
   const config = new PlaudConfig();
-  const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
+  const client = new PlaudClient(auth, config, fetchRequester);
 
   // Try MP3 first
   const mp3Url = await client.getMp3Url(id);

@@ -24,9 +24,12 @@ export class AuthManager {
     return this.auth.getToken();
   }
 
-  /** Check if credentials exist in ~/.plaud/config.json. */
+  /**
+   * Check if the user is authenticated via either source: a token from Plaud's
+   * passkey CLI (~/.plaud/tokens.json) or email/password creds (config.json).
+   */
   isConfigured(): boolean {
-    return !!this.config.getCredentials();
+    return !!this.config.getToken() || !!this.config.getCredentials();
   }
 
   /** Get the stored email (for display in settings). */
@@ -34,9 +37,9 @@ export class AuthManager {
     return this.config.getCredentials()?.email;
   }
 
-  /** Get the stored region. */
+  /** Get the region (from passkey JWT or stored credentials). */
   getRegion(): string {
-    return this.config.getCredentials()?.region ?? 'eu';
+    return this.config.getRegion();
   }
 
   /** How much time remains on the cached token. */

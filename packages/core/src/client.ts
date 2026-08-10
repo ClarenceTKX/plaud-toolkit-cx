@@ -1,39 +1,44 @@
 import { PlaudAuth } from './auth.js';
-import { BASE_URLS, fetchRequester } from './types.js';
+import { DEFAULT_API_BASE, fetchRequester } from './types.js';
 import type { PlaudRecording, PlaudRecordingDetail, PlaudUserInfo, Requester } from './types.js';
 
-/** Minimal config surface the client needs to persist a corrected region. */
-export interface RegionStore {
-  getCredentials(): { email: string; password: string; region: 'us' | 'eu' } | undefined;
-  saveCredentials(credentials: { email: string; password: string; region: 'us' | 'eu' }): void;
+/** Config surface the client needs (API base + token access via auth). */
+export interface ConfigStore {
+  getApiBase(): string;
 }
+
+/** page_size bounds enforced by the platform API (validated server-side). */
+const PAGE_SIZE_MIN = 10;
+const PAGE_SIZE_MAX = 100;
 
 export class PlaudClient {
   private auth: PlaudAuth;
-  private region: string;
   private requester: Requester;
-  private config?: RegionStore;
+  private baseUrl: string;
 
+  /**
+   * @param auth       token provider
+   * @param baseUrl    API base (e.g. https://platform.plaud.ai/developer/api).
+   *                   A ConfigStore may be passed instead to resolve it.
+   * @param requester  HTTP transport (defaults to fetch)
+   */
   constructor(
     auth: PlaudAuth,
-    region: string = 'us',
+    baseUrl: string | ConfigStore = DEFAULT_API_BASE,
     requester: Requester = fetchRequester,
-    config?: RegionStore,
+    _config?: ConfigStore, // back-compat: previously the 4th arg
   ) {
     this.auth = auth;
-    this.region = region;
     this.requester = requester;
-    this.config = config;
-  }
-
-  private get baseUrl(): string {
-    return BASE_URLS[this.region] ?? BASE_URLS['us'];
+    this.baseUrl =
+      typeof baseUrl === 'string'
+        ? stripTrailingSlash(baseUrl)
+        : stripTrailingSlash(baseUrl.getApiBase());
   }
 
   private async request(
     path: string,
     options?: { method?: string; headers?: Record<string, string>; body?: string },
-    retriedRegions: Set<string> = new Set(),
   ): Promise<any> {
     const token = await this.auth.getToken();
     const url = `${this.baseUrl}${path}`;
@@ -49,122 +54,221 @@ export class PlaudClient {
     });
 
     if (!res.ok) {
-      throw new Error(`Plaud API error: ${res.status}`);
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = typeof body?.detail === 'string' ? `: ${body.detail}` : ` : ${JSON.stringify(body).slice(0, 200)}`;
+      } catch { /* non-JSON error body */ }
+      throw new Error(`Plaud API error ${res.status}${detail}`);
     }
 
-    const data = await res.json();
-
-    // ── Region mismatch auto-recovery ─────────────────────────────────────
-    // Plaud rejects requests sent to the wrong regional endpoint. This can
-    // arrive in a few shapes: a -302 status (sometimes with the correct domain
-    // in data.domains.api, sometimes without), or a plain error message like
-    // "user region mismatch". In every case: pick the right region, persist it,
-    // and retry — guarding against retrying the same region twice.
-    if (isRegionMismatch(data)) {
-      const nextRegion = this.resolveMismatchRegion(data);
-      if (nextRegion && nextRegion !== this.region && !retriedRegions.has(nextRegion)) {
-        retriedRegions.add(this.region);
-        this.setRegion(nextRegion);
-        return this.request(path, options, retriedRegions);
-      }
-      // Couldn't resolve a new region to try — surface a clear, actionable error.
-      const msg = data?.msg ?? data?.message ?? 'user region mismatch';
-      throw new Error(
-        `Plaud region mismatch and auto-correction failed (${msg}). ` +
-          `Your account's region differs from the configured one; re-run \`plaud login\` and pick the other region (us/eu).`,
-      );
-    }
-
-    return data;
+    return res.json();
   }
 
   /**
-   * Choose the region to switch to on a mismatch. Prefer the domain Plaud
-   * hands back; otherwise just toggle to the opposite of the current region.
+   * List recordings (one page). The platform API requires page_size in
+   * [10, 100]; values are clamped so callers can't trip a 422.
    */
-  private resolveMismatchRegion(data: any): 'us' | 'eu' | null {
-    const domain: string | undefined = data?.data?.domains?.api ?? data?.domains?.api;
-    if (typeof domain === 'string' && domain.length > 0) {
-      return domain.includes('euc1') ? 'eu' : 'us';
-    }
-    // No domain hint — flip to the other known region.
-    if (this.region === 'eu') return 'us';
-    if (this.region === 'us') return 'eu';
-    return null;
-  }
-
-  /** Switch the in-memory region and persist it to config when available. */
-  private setRegion(region: 'us' | 'eu'): void {
-    this.region = region;
-    const creds = this.config?.getCredentials?.();
-    if (creds && creds.region !== region) {
-      this.config!.saveCredentials({ ...creds, region });
-    }
-  }
-
-  async listRecordings(): Promise<PlaudRecording[]> {
-    const data = await this.request('/file/simple/web');
-    const list: PlaudRecording[] = data.data_file_list ?? data.data ?? [];
-    return list.filter(r => !r.is_trash);
+  async listRecordings(page = 1, pageSize = 20): Promise<PlaudRecording[]> {
+    const size = Math.min(PAGE_SIZE_MAX, Math.max(PAGE_SIZE_MIN, Math.floor(pageSize)));
+    const p = Math.max(1, Math.floor(page));
+    const data = await this.request(`/open/third-party/files/?page=${p}&page_size=${size}`);
+    const list = extractList(data);
+    return list.map(normalizeRecording);
   }
 
   async getRecording(id: string): Promise<PlaudRecordingDetail> {
-    const data = await this.request(`/file/detail/${id}`);
-    const raw = data.data ?? data;
+    const data = await this.request(`/open/third-party/files/${id}`);
+    const raw = unwrap(data);
+    const base = normalizeRecording(raw);
 
-    let transcript = '';
-    const preDownload: any[] = raw.pre_download_content_list ?? [];
-    for (const item of preDownload) {
-      const content = item.data_content ?? '';
-      if (content.length > transcript.length) transcript = content;
-    }
+    // Transcript lives in `source_list` (data_type "transaction", a JSON
+    // string of {start_time,end_time,content} segments); the AI summary lives
+    // in `note_list` (data_type "auto_sum_note", markdown in data_content).
+    const transcriptText = extractTranscript(raw);
+    const summaryText = extractSummary(raw);
 
     return {
-      ...raw,
-      id: raw.file_id ?? id,
-      filename: raw.file_name ?? raw.filename ?? id,
-      transcript,
-    } as PlaudRecordingDetail;
-  }
-
-  async getUserInfo(): Promise<PlaudUserInfo> {
-    const data = await this.request('/user/me');
-    const user = data.data_user ?? data.data ?? data;
-    return {
-      id: user.id,
-      nickname: user.nickname,
-      email: user.email,
-      country: user.country,
-      membership_type: data.data_state?.membership_type ?? 'unknown',
+      ...base,
+      audio: typeof raw?.presigned_url === 'string' ? true : base.audio,
+      presigned_url: typeof raw?.presigned_url === 'string' ? raw.presigned_url : undefined,
+      transcript: transcriptText.length > 0 ? true : base.transcript,
+      summary: summaryText ? true : base.summary,
+      transcriptText,
+      summaryText: summaryText || undefined,
     };
   }
 
-  async downloadAudio(id: string): Promise<ArrayBuffer> {
-    const token = await this.auth.getToken();
-    const res = await this.requester({
-      url: `${this.baseUrl}/file/download/${id}`,
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-    return res.arrayBuffer();
-  }
-
+  /** Get a temporary MP3 download URL (the platform detail's `presigned_url`). */
   async getMp3Url(id: string): Promise<string | null> {
     try {
-      const data = await this.request(`/file/temp-url/${id}?is_opus=false`);
-      return data?.url ?? data?.data?.url ?? data?.data ?? data?.temp_url ?? null;
+      const data = await this.request(`/open/third-party/files/${id}`);
+      const raw = unwrap(data);
+      return typeof raw?.presigned_url === 'string' ? raw.presigned_url : null;
     } catch {
       return null;
     }
   }
+
+  /** Download the audio bytes via the detail's presigned S3 URL. */
+  async downloadAudio(id: string): Promise<ArrayBuffer> {
+    const url = await this.getMp3Url(id);
+    if (!url) throw new Error(`No audio available for recording ${id}`);
+    const res = await this.requester({ url });
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    return res.arrayBuffer();
+  }
+
+  async getUserInfo(): Promise<PlaudUserInfo> {
+    const data = await this.request('/open/third-party/users/current');
+    const user = unwrap(data);
+    return {
+      id: user.id ?? user.user_id ?? '',
+      nickname: user.nickname ?? user.name ?? '',
+      email: user.email ?? '',
+      country: user.country ?? '',
+      membership_type: user.membership_type ?? user.plan ?? 'unknown',
+    };
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function stripTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+/** Unwrap a `{ data: … }` envelope if present, else return the value as-is. */
+function unwrap(data: any): any {
+  if (data && typeof data === 'object' && 'data' in data && data.data && typeof data.data === 'object') {
+    return data.data;
+  }
+  return data;
+}
+
+/** Pull the recordings array out of the response across likely wrapper shapes. */
+function extractList(data: any): any[] {
+  const d = data?.data ?? data;
+  const candidates = [d?.files, d?.items, d?.list, d?.results, d?.records, d];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
 }
 
 /**
- * Detect a region-mismatch response across the shapes Plaud returns it in:
- * the `-302` status code, or an error message mentioning a region mismatch.
+ * Build the transcript from `source_list`. The transcript entry has
+ * `data_type: "transaction"` and `data_content` is a JSON-encoded array of
+ * `{ start_time, end_time, content }` segments (times in milliseconds).
+ * Returns the segments joined into readable text; falls back to raw content if
+ * it isn't the expected JSON.
  */
-function isRegionMismatch(data: any): boolean {
-  if (data?.status === -302) return true;
-  const msg = String(data?.msg ?? data?.message ?? '').toLowerCase();
-  return msg.includes('region mismatch') || msg.includes('user region');
+function extractTranscript(raw: any): string {
+  const sources: any[] = Array.isArray(raw?.source_list) ? raw.source_list : [];
+  const entry =
+    sources.find((s) => String(s?.data_type).toLowerCase() === 'transaction') ??
+    sources.find((s) => typeof s?.data_content === 'string' && s.data_content.trim().startsWith('['));
+  const content = entry?.data_content;
+  if (typeof content !== 'string' || !content.trim()) return '';
+
+  try {
+    const segs = JSON.parse(content);
+    if (Array.isArray(segs)) {
+      return segs
+        .map((s) => String(s?.content ?? '').trim())
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    }
+  } catch {
+    // not JSON — return as-is
+  }
+  return content.trim();
+}
+
+/**
+ * Structured transcript segments from `source_list`, with times in seconds
+ * (converted from the API's milliseconds). Empty when unavailable.
+ */
+export function extractTranscriptSegments(
+  raw: any,
+): Array<{ start: number; end: number; text: string }> {
+  const sources: any[] = Array.isArray(raw?.source_list) ? raw.source_list : [];
+  const entry = sources.find((s) => String(s?.data_type).toLowerCase() === 'transaction');
+  const content = entry?.data_content;
+  if (typeof content !== 'string') return [];
+  try {
+    const segs = JSON.parse(content);
+    if (!Array.isArray(segs)) return [];
+    return segs
+      .map((s) => ({
+        start: (Number(s?.start_time) || 0) / 1000,
+        end: (Number(s?.end_time) || 0) / 1000,
+        text: String(s?.content ?? '').trim(),
+      }))
+      .filter((s) => s.text.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AI summary markdown from `note_list` (`data_type: "auto_sum_note"`), falling
+ * back to any note entry that carries `data_content`.
+ */
+function extractSummary(raw: any): string | undefined {
+  const notes: any[] = Array.isArray(raw?.note_list) ? raw.note_list : [];
+  const summary =
+    notes.find((n) => String(n?.data_type).toLowerCase().includes('sum')) ??
+    notes.find((n) => typeof n?.data_content === 'string' && n.data_content.trim());
+  const content = summary?.data_content;
+  return typeof content === 'string' && content.trim() ? content : undefined;
+}
+
+/**
+ * Normalize a platform-API file object into `PlaudRecording`, populating both
+ * the canonical fields and the legacy aliases older consumers still read.
+ */
+function normalizeRecording(raw: any): PlaudRecording {
+  const id = raw?.id ?? raw?.file_id ?? '';
+  const name = raw?.name ?? raw?.filename ?? raw?.file_name ?? String(id);
+  const createdAt = raw?.created_at ?? raw?.create_time ?? raw?.createdAt ?? '';
+  const startAt = raw?.start_at ?? raw?.start_time_iso ?? undefined;
+  const duration = Number(raw?.duration ?? 0) || 0;
+
+  // Legacy epoch-ms mirror of the start time (some consumers expect a number).
+  const startMs = toEpochMs(startAt ?? createdAt);
+
+  return {
+    id,
+    name,
+    created_at: createdAt,
+    duration,
+    start_at: startAt,
+    serial_number: raw?.serial_number ?? raw?.serialNumber,
+    audio: coerceBool(raw?.audio),
+    transcript: coerceBool(raw?.transcript),
+    summary: coerceBool(raw?.summary),
+
+    // legacy aliases
+    filename: name,
+    fullname: raw?.fullname ?? raw?.full_name,
+    start_time: startMs,
+    is_trash: coerceBool(raw?.is_trash) ?? false,
+    is_trans: coerceBool(raw?.transcript ?? raw?.is_trans),
+    is_summary: coerceBool(raw?.summary ?? raw?.is_summary),
+  };
+}
+
+function coerceBool(v: any): boolean | undefined {
+  if (typeof v === 'boolean') return v;
+  if (v === 1 || v === '1' || v === 'true') return true;
+  if (v === 0 || v === '0' || v === 'false') return false;
+  return undefined;
+}
+
+function toEpochMs(iso: string | undefined): number {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
 }

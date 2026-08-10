@@ -1,27 +1,46 @@
-import * as readline from 'readline';
 import { PlaudConfig, PlaudAuth } from '@plaud/core';
 
+/**
+ * Verify the credentials already stored in ~/.plaud/ and confirm they
+ * authenticate. Supports both auth sources Plaud uses:
+ *
+ *  - Passkey / browser login (Plaud's official `plaud login`) → ~/.plaud/tokens.json
+ *  - Email / password (legacy) → ~/.plaud/config.json
+ *
+ * This command is intentionally non-interactive: it does not prompt for or
+ * overwrite anything. It reads whatever token/credentials exist, verifies them,
+ * and reports status. To (re)authenticate with a passkey, run Plaud's official
+ * `plaud login`.
+ */
 export async function loginCommand(_args: string[]): Promise<void> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q: string): Promise<string> =>
-    new Promise(resolve => rl.question(q, resolve));
+  const config = new PlaudConfig();
+  const token = config.getToken();
+  const creds = config.getCredentials();
 
+  if (!token && !creds) {
+    console.error(
+      'No Plaud authentication found in ~/.plaud/.\n' +
+        'Run Plaud\'s CLI login (`plaud login`) to authenticate — it writes ~/.plaud/tokens.json.',
+    );
+    process.exit(1);
+  }
+
+  const region = config.getRegion();
+  console.log(`Verifying Plaud authentication (region: ${region})…`);
+
+  const auth = new PlaudAuth(config);
   try {
-    const email = await ask('Plaud email: ');
-    const password = await ask('Password: ');
+    await auth.getToken(); // validates token / logs in if email+password creds exist
+  } catch (err: any) {
+    console.error(`Verification failed: ${err?.message ?? err}`);
+    process.exit(1);
+  }
 
-    const config = new PlaudConfig();
-    // Region is auto-detected during login — default to 'eu' and let PlaudAuth
-    // fall back to the correct region, persisting whichever one works.
-    config.saveCredentials({ email: email.trim(), password, region: 'eu' });
-
-    console.log('Credentials saved. Verifying (auto-detecting region)…');
-
-    const auth = new PlaudAuth(config);
-    await auth.login();
-    const region = config.getCredentials()?.region ?? 'eu';
+  if (token) {
+    const remaining = token.expiresAt - Date.now();
+    const days = Math.max(0, Math.floor(remaining / (24 * 60 * 60 * 1000)));
+    console.log(`Authenticated (region: ${region}). Token valid for ~${days} day(s).`);
+  } else {
     console.log(`Login successful (region: ${region}). Token valid for ~300 days.`);
-  } finally {
-    rl.close();
   }
 }

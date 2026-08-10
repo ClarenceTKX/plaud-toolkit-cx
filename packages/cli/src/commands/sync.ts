@@ -10,9 +10,8 @@ export async function syncCommand(args: string[]): Promise<void> {
   }
 
   const config = new PlaudConfig();
-  const creds = config.getCredentials();
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds?.region ?? 'eu', fetchRequester, config);
+  const client = new PlaudClient(auth, config, fetchRequester);
 
   fs.mkdirSync(folder, { recursive: true });
 
@@ -21,27 +20,28 @@ export async function syncCommand(args: string[]): Promise<void> {
 
   let synced = 0;
   for (const rec of recordings) {
-    const date = new Date(rec.start_time).toISOString().slice(0, 10);
-    const slug = rec.filename?.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 50) || rec.id;
+    const iso = rec.start_at ?? rec.created_at ?? '';
+    const date = iso ? iso.slice(0, 10) : 'unknown';
+    const slug = rec.name?.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 50) || rec.id;
     const mdFile = path.join(folder, `${date}_${slug}.md`);
 
     if (fs.existsSync(mdFile)) continue;
 
-    console.log(`Syncing: ${rec.filename} (${rec.id})...`);
+    console.log(`Syncing: ${rec.name} (${rec.id})...`);
     const detail = await client.getRecording(rec.id);
 
     const content = [
       '---',
       `plaud_id: ${rec.id}`,
-      `title: "${rec.filename}"`,
+      `title: "${rec.name}"`,
       `date: ${date}`,
       `duration: ${Math.round(rec.duration / 60000)}m`,
       `source: plaud`,
       '---',
       '',
-      `# ${rec.filename}`,
+      `# ${rec.name}`,
       '',
-      detail.transcript || '*(No transcript available)*',
+      detail.transcriptText || '*(No transcript available)*',
     ].join('\n');
 
     fs.writeFileSync(mdFile, content);

@@ -18,19 +18,20 @@ export class SettingsTab extends PluginSettingTab {
 
     const authStatus = containerEl.createDiv('plaud-token-status');
     if (this.plugin.authManager.isConfigured()) {
-      const email = this.plugin.authManager.getEmail() ?? 'unknown';
+      const email = this.plugin.authManager.getEmail();
+      const who = email ? `Logged in as ${email}` : 'Logged in (passkey)';
       const tokenInfo = this.plugin.authManager.tokenStatus();
       authStatus.createEl('span', {
-        text: `Logged in as ${email} — token: ${tokenInfo}`,
+        text: `${who} — token: ${tokenInfo}`,
         cls: 'plaud-token-ok',
       });
     } else {
       authStatus.createEl('span', {
-        text: 'Not logged in. Run `plaud login` in your terminal to configure credentials.',
+        text: 'Not logged in. Run `plaud login` in your terminal to authenticate.',
         cls: 'plaud-token-missing',
       });
       const helpEl = containerEl.createEl('p', { cls: 'setting-item-description' });
-      helpEl.innerHTML = 'Credentials are stored in <code>~/.plaud/config.json</code> and shared with the plaud CLI and MCP server.';
+      helpEl.innerHTML = 'Auth is read from <code>~/.plaud/</code> (passkey <code>tokens.json</code> or <code>config.json</code>), shared with the plaud CLI and MCP server.';
     }
 
     new Setting(containerEl)

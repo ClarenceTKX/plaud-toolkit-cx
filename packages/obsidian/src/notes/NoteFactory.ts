@@ -44,7 +44,9 @@ export class NoteFactory {
     },
   ): string {
     const { rec, transcription, audioVaultPath } = ctx;
-    const date = epochMsToDate(rec.start_time);
+    // Prefer the platform API's ISO start/created time; fall back to legacy ms.
+    const iso = rec.start_at ?? rec.created_at;
+    const date = iso ? new Date(iso) : epochMsToDate(rec.start_time ?? 0);
 
     const timestamps = transcription.segments
       .map(s => `- **${formatTimestamp(s.start)}** — ${s.text}`)
