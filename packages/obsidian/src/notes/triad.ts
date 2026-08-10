@@ -52,3 +52,19 @@ export function triadAudioPath(
 export function triadLlmPath(rec: PlaudFile, settings: PlaudSettings): string {
   return `${triadFolder(settings)}/${triadStem(rec)}.llm.md`;
 }
+
+/**
+ * `<triadFolder>/<ts>.json` — the Plaud transcript stored as structured JSON
+ * (segments array with speaker labels), written when a server transcript exists.
+ */
+export function triadTranscriptJsonPath(rec: PlaudFile, settings: PlaudSettings): string {
+  return `${triadFolder(settings)}/${triadStem(rec)}.json`;
+}
+
+/**
+ * `<triadFolder>/<ts>.summary.md` — Plaud's AI summary as markdown, written only
+ * when the recording has a server-side summary.
+ */
+export function triadSummaryPath(rec: PlaudFile, settings: PlaudSettings): string {
+  return `${triadFolder(settings)}/${triadStem(rec)}.summary.md`;
+}

@@ -111,11 +111,27 @@ export interface PlaudRecording {
   is_summary?: boolean;
 }
 
+/**
+ * One transcript segment from Plaud's `source_list` transaction data.
+ * Times are in **seconds** (converted from the API's milliseconds).
+ */
+export interface PlaudTranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+  /** Resolved/named speaker (e.g. "Caleb"), when diarization is available. */
+  speaker?: string;
+  /** Raw diarization label (e.g. "Speaker 1"), when available. */
+  original_speaker?: string;
+}
+
 export interface PlaudRecordingDetail extends PlaudRecording {
   /** Temporary presigned S3 URL for the MP3 (valid ~24h), when available. */
   presigned_url?: string;
   /** Full transcript text (empty string when not available). */
   transcriptText?: string;
+  /** Structured transcript segments (with speakers), when available. */
+  segments?: PlaudTranscriptSegment[];
   /** AI summary markdown, when available. */
   summaryText?: string;
 }

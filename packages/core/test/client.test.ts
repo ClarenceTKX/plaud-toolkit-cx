@@ -100,11 +100,48 @@ describe('PlaudClient (platform API)', () => {
     });
 
     const detail = await client.getRecording('rec1');
-    expect(detail.transcriptText).toBe('Hello everyone. Welcome to the meeting.');
+    // no speaker labels → one segment per line
+    expect(detail.transcriptText).toBe('Hello everyone.\nWelcome to the meeting.');
     expect(detail.summaryText).toContain('Key points');
     expect(detail.presigned_url).toContain('rec1.mp3');
     expect(detail.audio).toBe(true);
     expect(detail.transcript).toBe(true); // availability flag
+  });
+
+  it('extracts speaker-labelled segments and speaker-prefixed text', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'rec2',
+        name: 'Meeting',
+        duration: 1000,
+        source_list: [
+          {
+            data_type: 'transaction',
+            data_content: JSON.stringify([
+              { start_time: 4550, end_time: 45420, content: 'Welcome everyone.', speaker: 'Caleb', original_speaker: 'Speaker 1' },
+              { start_time: 45420, end_time: 60000, content: 'Thanks for having me.', speaker: 'Ryan', original_speaker: 'Speaker 2' },
+              { start_time: 60000, end_time: 65000, content: 'Let us begin.', speaker: 'Caleb', original_speaker: 'Speaker 1' },
+            ]),
+          },
+        ],
+      }),
+    });
+
+    const detail = await client.getRecording('rec2');
+    // structured segments carry speaker + original_speaker, times in seconds
+    expect(detail.segments).toHaveLength(3);
+    expect(detail.segments![0]).toMatchObject({
+      start: 4.55,
+      end: 45.42,
+      text: 'Welcome everyone.',
+      speaker: 'Caleb',
+      original_speaker: 'Speaker 1',
+    });
+    // flat text is speaker-prefixed on speaker change
+    expect(detail.transcriptText).toBe(
+      'Caleb: Welcome everyone.\nRyan: Thanks for having me.\nCaleb: Let us begin.',
+    );
   });
 
   it('gets user info from /users/current', async () => {

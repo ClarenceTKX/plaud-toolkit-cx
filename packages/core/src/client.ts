@@ -1,6 +1,12 @@
 import { PlaudAuth } from './auth.js';
 import { DEFAULT_API_BASE, fetchRequester } from './types.js';
-import type { PlaudRecording, PlaudRecordingDetail, PlaudUserInfo, Requester } from './types.js';
+import type {
+  PlaudRecording,
+  PlaudRecordingDetail,
+  PlaudTranscriptSegment,
+  PlaudUserInfo,
+  Requester,
+} from './types.js';
 
 /** Config surface the client needs (API base + token access via auth). */
 export interface ConfigStore {
@@ -83,8 +89,9 @@ export class PlaudClient {
     const base = normalizeRecording(raw);
 
     // Transcript lives in `source_list` (data_type "transaction", a JSON
-    // string of {start_time,end_time,content} segments); the AI summary lives
-    // in `note_list` (data_type "auto_sum_note", markdown in data_content).
+    // string of {start_time,end_time,content,speaker,original_speaker} segments);
+    // the AI summary lives in `note_list` (data_type "auto_sum_note", markdown).
+    const segments = extractTranscriptSegments(raw);
     const transcriptText = extractTranscript(raw);
     const summaryText = extractSummary(raw);
 
@@ -95,6 +102,7 @@ export class PlaudClient {
       transcript: transcriptText.length > 0 ? true : base.transcript,
       summary: summaryText ? true : base.summary,
       transcriptText,
+      segments,
       summaryText: summaryText || undefined,
     };
   }
@@ -174,11 +182,25 @@ function extractTranscript(raw: any): string {
   try {
     const segs = JSON.parse(content);
     if (Array.isArray(segs)) {
-      return segs
-        .map((s) => String(s?.content ?? '').trim())
-        .filter(Boolean)
-        .join(' ')
-        .trim();
+      // Prefix each turn with its speaker when diarization is present, grouping
+      // consecutive same-speaker segments under one label.
+      const lines: string[] = [];
+      let lastSpeaker: string | undefined;
+      for (const s of segs) {
+        const text = String(s?.content ?? '').trim();
+        if (!text) continue;
+        const speaker = typeof s?.speaker === 'string' ? s.speaker.trim() : '';
+        if (speaker && speaker !== lastSpeaker) {
+          lines.push(`${speaker}: ${text}`);
+          lastSpeaker = speaker;
+        } else if (speaker) {
+          lines.push(text); // same speaker continues
+        } else {
+          lines.push(text);
+          lastSpeaker = undefined;
+        }
+      }
+      return lines.join('\n').trim();
     }
   } catch {
     // not JSON — return as-is
@@ -188,11 +210,10 @@ function extractTranscript(raw: any): string {
 
 /**
  * Structured transcript segments from `source_list`, with times in seconds
- * (converted from the API's milliseconds). Empty when unavailable.
+ * (converted from the API's milliseconds) and speaker labels when Plaud's
+ * diarization provides them. Empty when unavailable.
  */
-export function extractTranscriptSegments(
-  raw: any,
-): Array<{ start: number; end: number; text: string }> {
+export function extractTranscriptSegments(raw: any): PlaudTranscriptSegment[] {
   const sources: any[] = Array.isArray(raw?.source_list) ? raw.source_list : [];
   const entry = sources.find((s) => String(s?.data_type).toLowerCase() === 'transaction');
   const content = entry?.data_content;
@@ -201,11 +222,18 @@ export function extractTranscriptSegments(
     const segs = JSON.parse(content);
     if (!Array.isArray(segs)) return [];
     return segs
-      .map((s) => ({
-        start: (Number(s?.start_time) || 0) / 1000,
-        end: (Number(s?.end_time) || 0) / 1000,
-        text: String(s?.content ?? '').trim(),
-      }))
+      .map((s): PlaudTranscriptSegment => {
+        const seg: PlaudTranscriptSegment = {
+          start: (Number(s?.start_time) || 0) / 1000,
+          end: (Number(s?.end_time) || 0) / 1000,
+          text: String(s?.content ?? '').trim(),
+        };
+        const speaker = typeof s?.speaker === 'string' ? s.speaker.trim() : '';
+        const original = typeof s?.original_speaker === 'string' ? s.original_speaker.trim() : '';
+        if (speaker) seg.speaker = speaker;
+        if (original) seg.original_speaker = original;
+        return seg;
+      })
       .filter((s) => s.text.length > 0);
   } catch {
     return [];

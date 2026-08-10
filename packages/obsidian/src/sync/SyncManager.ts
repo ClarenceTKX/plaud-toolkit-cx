@@ -6,6 +6,8 @@ import {
   triadFolder,
   triadAudioPath,
   triadLlmPath,
+  triadTranscriptJsonPath,
+  triadSummaryPath,
 } from '../notes/triad';
 
 /**
@@ -189,6 +191,11 @@ export class SyncManager {
       bestAudioPath,
       this.plugin.settings,
     );
+
+    // ── Store Plaud's structured transcript (JSON) + AI summary (Markdown) ──
+    // When Plaud has a server transcript, persist the speaker-labelled segments
+    // as <ts>.json; when it has an AI summary, persist it as <ts>.summary.md.
+    await writePlaudArtifacts(this.plugin.app.vault, rec, detail, this.plugin.settings);
 
     // ── Write the AI-result file (only when Superwhisper produced one) ─────
     // Voice-only results omit `<ts>.llm.md` entirely; the note still carries the
@@ -615,6 +622,54 @@ function parseServerTranscript(raw: string): TranscriptionResult {
 
   const fullText = segments.map(s => s.text).join('\n\n');
   return { text: fullText, segments };
+}
+
+/**
+ * Persist Plaud's server-side artifacts into the triad:
+ *  - `<ts>.json`         — structured transcript (speaker-labelled segments)
+ *  - `<ts>.summary.md`   — Plaud's AI summary (Markdown)
+ * Each is written only when the corresponding data is present. Files are
+ * overwritten so re-syncs pick up updated transcripts/summaries.
+ */
+async function writePlaudArtifacts(
+  vault: Vault,
+  rec: PlaudFile,
+  detail: PlaudFileDetail,
+  settings: import('../settings').PlaudSettings,
+): Promise<void> {
+  const segments = (detail as any).segments as
+    | Array<{ start: number; end: number; text: string; speaker?: string; original_speaker?: string }>
+    | undefined;
+
+  if (Array.isArray(segments) && segments.length > 0) {
+    const payload = {
+      plaud_id: rec.id,
+      name: (rec as any).name ?? rec.filename ?? rec.id,
+      source: 'plaud',
+      segments,
+    };
+    await writeFileOverwrite(
+      vault,
+      triadTranscriptJsonPath(rec, settings),
+      JSON.stringify(payload, null, 2) + '\n',
+    );
+  }
+
+  const summary = (detail as any).summaryText as string | undefined;
+  if (summary && summary.trim().length > 0) {
+    await writeFileOverwrite(vault, triadSummaryPath(rec, settings), summary.trim() + '\n');
+  }
+}
+
+/** Create or overwrite a vault file at `path` with `body`. */
+async function writeFileOverwrite(vault: Vault, path: string, body: string): Promise<void> {
+  const normalized = normalizePath(path);
+  const existing = vault.getAbstractFileByPath(normalized);
+  if (existing instanceof TFile) {
+    await vault.modify(existing, body);
+  } else {
+    await vault.create(normalized, body);
+  }
 }
 
 /**
