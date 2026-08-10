@@ -1,6 +1,7 @@
 # plaud
 
-> **Alpha** — Early test version. Building in public, testing on my own recordings.
+> **Alpha** —— Early test version. Building in public, testing on my own recordings.
+> **Fork** —— ClarenceTKX: Added Superwhisper refactor and processing logic that matches my own workflow with Obsidian. Allows for on-device transcription with Superwhisper.
 
 Unofficial TypeScript toolkit for the [Plaud](https://www.plaud.ai/) API — core library, CLI, MCP server, and an Obsidian plugin.
 
@@ -18,7 +19,7 @@ This toolkit gives you programmatic access to your own recordings. Download audi
 ## Setup
 
 ```bash
-git clone https://github.com/sergivalverde/plaud-toolkit.git
+git clone [https://github.com/sergivalverde/plaud-toolkit.git](https://github.com/ClarenceTKX/plaud-toolkit-cx.git)
 cd plaud-toolkit && npm install
 ```
 
