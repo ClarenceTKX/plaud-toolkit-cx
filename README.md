@@ -19,7 +19,7 @@ This toolkit gives you programmatic access to your own recordings. Download audi
 ## Setup
 
 ```bash
-git clone [https://github.com/sergivalverde/plaud-toolkit.git](https://github.com/ClarenceTKX/plaud-toolkit-cx.git)
+git clone https://github.com/sergivalverde/plaud-toolkit.git
 cd plaud-toolkit && npm install
 ```
 
