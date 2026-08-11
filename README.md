@@ -1,37 +1,51 @@
-# plaud
+# plaud-toolkit
 
-> **Alpha** —— Early test version. Building in public, testing on my own recordings.
-> **Fork** —— ClarenceTKX: Added Superwhisper refactor and processing logic that matches my own workflow with Obsidian. Allows for on-device transcription with Superwhisper.
+> **Alpha** — Early test version. Building in public, testing on my own recordings.
+> **Fork (ClarenceTKX)** — Migrated to Plaud's current platform API + passkey login, and swapped local transcription to [macparakeet](https://macparakeet.com) (Parakeet TDT, on-device, with speaker labels) with optional AI summaries via **Claude Code** (no API key). Tailored to an Obsidian workflow.
 
-Unofficial TypeScript toolkit for the [Plaud](https://www.plaud.ai/) API — core library, CLI, MCP server, and an Obsidian plugin.
+Unofficial TypeScript toolkit for the [Plaud](https://www.plaud.ai/) API — core library, CLI, MCP server, and an Obsidian plugin ("Plaud Toolkit").
 
 ## Why
 
-[Plaud](https://www.plaud.ai/) makes AI-powered wearable recorders (Plaud Note, Plaud NotePin) that capture meetings, conversations, and voice notes, then transcribe and summarize them in the cloud. Great hardware, but all your data lives behind their app with no official API or export tools.
+[Plaud](https://www.plaud.ai/) makes AI-powered wearable recorders (Plaud Note, Plaud Note Pro, NotePin) that capture meetings and voice notes, then transcribe and summarize them in the cloud. Great hardware, but your data lives behind their app.
 
-This toolkit gives you programmatic access to your own recordings. Download audio files, pull transcripts, sync everything to local folders — your data, your workflow. Built as a monorepo with four packages:
+This toolkit gives you programmatic access to your own recordings — download audio, pull transcripts and AI summaries, and sync everything to local folders. Built as a monorepo with four packages:
 
-- **`@plaud/core`** — Shared library: authentication, API client, config management. Handles token lifecycle automatically (tokens last ~300 days, auto-refresh when within 30 days of expiry). Requests run through a pluggable HTTP transport (Node `fetch` by default; the Obsidian plugin injects `requestUrl` to bypass renderer CORS).
+- **`@plaud/core`** — Shared library: authentication, platform API client, config, plus the macparakeet transcription/summary bridge. Reads the passkey token from `~/.plaud/tokens.json` (written by Plaud's official CLI). Requests run through a pluggable HTTP transport (Node `fetch` by default; the Obsidian plugin injects `requestUrl` to bypass renderer CORS).
 - **`@plaud/cli`** — Command-line tool to list, download, transcribe, and sync recordings.
-- **`@plaud/mcp`** — [MCP server](https://modelcontextprotocol.io/) that exposes your Plaud recordings to AI assistants like Claude, making your voice notes searchable and accessible from any MCP-compatible tool.
-- **`@plaud/obsidian`** — Obsidian plugin ("Plaud Pin Sync") that syncs recordings into your vault as Markdown notes, downloads the audio, and transcribes on-device with [Superwhisper](https://superwhisper.com).
+- **`@plaud/mcp`** — [MCP server](https://modelcontextprotocol.io/) that exposes your Plaud recordings to AI assistants like Claude.
+- **`@plaud/obsidian`** — Obsidian plugin ("Plaud Toolkit") that syncs recordings into your vault as Markdown notes, downloads audio, transcribes on-device with macparakeet, and can summarize via Claude Code.
+
+## Requirements
+
+- **macOS on Apple Silicon** for local transcription.
+- Plaud's official CLI for authentication: `npm install -g @plaud-ai/cli`, then `plaud login` (passkey/browser sign-in → writes `~/.plaud/tokens.json`).
+- **[macparakeet-cli](https://macparakeet.com)** for on-device transcription: `brew install moona3k/tap/macparakeet-cli` (or the MacParakeet.app bundle).
+- **Optional, for AI summaries:** [Claude Code](https://claude.com/claude-code) (`claude`) — summaries run through `claude -p` with no API key. Hosted providers (Anthropic API key, Ollama, …) are also supported.
 
 ## Setup
 
 ```bash
 git clone https://github.com/ClarenceTKX/plaud-toolkit-cx.git
-cd plaud-toolkit && npm install
+cd plaud-toolkit-cx && npm install
 ```
 
 ### 1. Login
 
+Authenticate with Plaud's official CLI (passkey / browser sign-in). This writes `~/.plaud/tokens.json`, which this toolkit reads directly:
+
 ```bash
-npx tsx packages/cli/bin/plaud.ts login
+npm install -g @plaud-ai/cli
+plaud login          # opens a browser to sign in
 ```
 
-Enter your email, password, and region (us/eu). Credentials are stored locally in `~/.plaud/config.json` (mode 0600).
+Then verify the toolkit picks up your session:
 
-> **Note:** If you use Google Sign-In on Plaud, first set a password via "Forgot Password" on [web.plaud.ai](https://web.plaud.ai).
+```bash
+npx tsx packages/cli/bin/plaud.ts login   # non-interactive: verifies ~/.plaud/tokens.json
+```
+
+Region is auto-detected from the token — no us/eu prompt. The API base defaults to `https://platform.plaud.ai/developer/api` and can be overridden via `PLAUD_API_BASE` or `~/.plaud/cli.yaml`.
 
 ### 2. CLI Usage
 
@@ -39,15 +53,27 @@ Enter your email, password, and region (us/eu). Credentials are stored locally i
 # List recordings
 npx tsx packages/cli/bin/plaud.ts list
 
-# Get transcript
+# Get transcript (speaker-labelled)
 npx tsx packages/cli/bin/plaud.ts transcript <recording-id>
 
-# Download audio
+# Download audio (MP3)
 npx tsx packages/cli/bin/plaud.ts download <recording-id> ./audio/
 
-# Sync all recordings to a folder
+# Sync new recordings to a folder (transcribe locally when Plaud has no transcript)
 npx tsx packages/cli/bin/plaud.ts sync ./plaud-notes/
+
+# Sync and also generate an AI summary (via Claude Code, no API key)
+npx tsx packages/cli/bin/plaud.ts sync ./plaud-notes/ --summarize --prompt "Summary"
 ```
+
+`sync` writes, per recording (shared `<date>_<slug>` stem):
+
+- `<stem>.md` — note with frontmatter + transcript
+- `<stem>.json` — structured transcript (`{start,end,text,speaker}` segments)
+- `<stem>.mp3` — audio
+- `<stem>.summary.md` — AI summary, **only** when one exists (Plaud's, or `--summarize`)
+
+`--summarize` options: `--prompt <name>` (a macparakeet prompt), `--provider <cli|anthropic|ollama|…>` (default `cli`), `--command <cmd>` (default `claude -p`).
 
 ### 3. MCP Server
 
@@ -58,11 +84,13 @@ Add to your Claude config (`~/.claude.json`):
   "mcpServers": {
     "plaud": {
       "command": "npx",
-      "args": ["tsx", "/path/to/plaud-toolkit/packages/mcp/src/index.ts"]
+      "args": ["tsx", "/absolute/path/to/plaud-toolkit-cx/packages/mcp/src/index.ts"]
     }
   }
 }
 ```
+
+Use the absolute path to your clone. The server reads auth from `~/.plaud/tokens.json`, so run `plaud login` first.
 
 Tools available:
 - `plaud_list_recordings` — list all recordings
@@ -71,19 +99,18 @@ Tools available:
 - `plaud_user_info` — account info
 - `plaud_get_mp3_url` — temporary MP3 download URL
 
-### 4. Obsidian Plugin
+### 4. Obsidian Plugin ("Plaud Toolkit")
 
-The `@plaud/obsidian` package is an Obsidian plugin ("Plaud Pin Sync") that pulls new recordings into your vault on a schedule. For each recording it downloads the audio, transcribes it (using Plaud's server transcript when available, otherwise on-device via [Superwhisper](https://superwhisper.com)), and writes a Markdown note with frontmatter, transcript, and timestamps.
+The `@plaud/obsidian` package pulls new recordings into your vault on a schedule. For each recording it downloads the audio and writes a Markdown note; it uses Plaud's server transcript when available, otherwise transcribes on-device with [macparakeet](https://macparakeet.com).
 
-Each synced recording is stored as a **triad** in a single shared folder, keyed by a per-recording timestamp so the files group together:
+Each synced recording is stored under a shared `<date>_<slug>` stem in one folder (the CLI produces identical filenames):
 
-- `<timestamp>.md` — the transcript note (frontmatter carries `plaud_id`)
-- `<timestamp>.<ext>` — the audio that was passed to Superwhisper
-- `<timestamp>.llm.md` — Superwhisper's AI-processed result, **only when an AI mode produced one**
+- `<stem>.md` — the note (frontmatter carries `plaud_id`, and `parakeet_id` when transcribed locally)
+- `<stem>.mp3` — the audio
+- `<stem>.json` — structured transcript with speaker labels (`{start, end, text, speaker}`)
+- `<stem>.summary.md` — AI summary, **only when one exists** (Plaud's, or generated on demand)
 
-For local transcription the plugin hands the audio to Superwhisper (`open <file> -a superwhisper`), then watches Superwhisper's recordings folder for the resulting `meta.json`. It prefers the AI result (`llmResult`) and falls back to the raw voice transcript (`result`). When a recording is transcribed by a voice-only mode (no `llmResult`), the note is flagged `superwhisper_ai_processed: false` with an "AI processing pending" callout, and no `.llm.md` is written.
-
-**Requirements:** macOS, and the [Superwhisper](https://superwhisper.com) app installed and running. Transcription behaviour (language, model, AI processing) is governed by Superwhisper's **currently active mode**, not by plugin settings — set your preferred mode active in Superwhisper before syncing.
+Local transcription runs `macparakeet-cli transcribe … --format json` (Parakeet TDT, on the Neural Engine) — fully local, with speaker diarization. Summaries run macparakeet's prompt library through **Claude Code** by default (`claude -p`, no API key); other providers are supported via settings.
 
 **Install into a vault** (builds the plugin and symlinks it in):
 
@@ -92,27 +119,29 @@ npm run build:plugin
 ./scripts/install-plugin.sh /path/to/your/vault
 ```
 
-Then enable **Plaud Pin Sync** in Obsidian's community-plugins settings. Because it shares `@plaud/core`, the plugin uses the same credentials from `~/.plaud/config.json` — run `plaud login` first.
+Then enable **Plaud Toolkit** in Obsidian's community-plugins settings. It reads auth from `~/.plaud/tokens.json` — run `plaud login` (Plaud's CLI) first.
 
-In the plugin's settings tab you can configure:
+Settings:
 
-- **Plaud region** — `us` or `eu`.
-- **Superwhisper recordings folder** — where Superwhisper writes results. Leave empty to auto-detect (`~/superwhisper/recordings`, then the legacy `~/Documents/superwhisper/recordings`). A **Check** button verifies the app is installed and the folder exists.
-- **Transcription timeout (minutes)** — how long to wait for Superwhisper to finish before giving up (default 10).
-- **Triad folder** — the single vault folder that holds each recording's triad (default `__Support/Plaud`).
-- **Auto-sync interval** — default every 60 minutes; set to Manual to disable.
+- **macparakeet status** — a **Check** button that verifies `macparakeet-cli` is installed and its model is ready.
+- **Speaker count** — optional exact speaker count for diarization (blank = auto).
+- **Generate AI summaries on sync** + **Summary prompt / provider / CLI command** — default provider `cli`, command `claude -p` (no API key).
+- **Storage folder** — the vault folder holding all files (default `__Support/Plaud`).
+- **Auto-sync interval** — default every 60 minutes; Manual to disable.
 
-Manual commands are also available from the command palette ("Sync Plaud recordings", "Retranscribe pending recordings", "Re-transcribe current note").
+Command palette: **Sync Plaud recordings**, **Re-transcribe current note**, **Summarise current note (macparakeet prompt)** — the last opens a picker of macparakeet's saved prompts and writes `<stem>.summary.md`.
 
-> Updating the plugin later: `git pull && npm run build:plugin` — the symlink picks up the new build; just reload the plugin (or Obsidian).
+> The plugin resolves `macparakeet-cli` by absolute path (`/usr/local/bin`, `/opt/homebrew/bin`, or the MacParakeet.app bundle) because GUI apps don't inherit your shell `PATH`.
 
-## Token Management
+> Updating later: `git pull && npm run build:plugin`, then reload the plugin (or Obsidian).
 
-Tokens are obtained automatically via email+password and last ~300 days. The library refreshes silently when a token is within 30 days of expiry. No manual intervention needed after initial `plaud login`.
+## Authentication & tokens
+
+Auth comes from `~/.plaud/tokens.json`, written by Plaud's official CLI passkey login (`access_token`, `refresh_token`, `expires_at`). Region is derived from the token. When the token expires, re-run `plaud login`.
 
 ## API
 
-The API was reverse-engineered from the Plaud web app. This is an unofficial project — not affiliated with or endorsed by Plaud.
+The personal-recordings API (`platform.plaud.ai/developer/api`) was observed from Plaud's official CLI. This is an unofficial project — not affiliated with or endorsed by Plaud.
 
 ## License
 
