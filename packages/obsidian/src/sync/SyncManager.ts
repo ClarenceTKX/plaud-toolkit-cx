@@ -5,18 +5,9 @@ import type { PlaudFile, PlaudFileDetail, SyncStatus, TranscriptionResult } from
 import {
   triadFolder,
   triadAudioPath,
-  triadLlmPath,
   triadTranscriptJsonPath,
   triadSummaryPath,
 } from '../notes/triad';
-
-/**
- * Marker appended to notes whose transcript is voice-only (Superwhisper
- * produced no `llmResult`). The vault-access flow watches for this so it can
- * proactively offer to run AI processing on the recording.
- */
-export const AI_PENDING_MARKER =
-  '> [!todo] AI processing pending — Superwhisper returned a voice-only transcript (no AI result). Re-run this recording through an AI mode if you want a processed version.';
 
 export class SyncManager {
   private intervalId: number | null = null;
@@ -100,53 +91,26 @@ export class SyncManager {
       recordingId: rec.id,
     });
 
-    // Triad model: all three artifacts share one folder + timestamp stem
-    // (derived internally by the triad path helpers from `rec`).
+    // Triad model: all artifacts share one folder + stem (derived by the triad
+    // path helpers from `rec`). The platform API serves a single MP3 per
+    // recording via a presigned URL, so we download exactly one audio file.
     const folder = triadFolder(this.plugin.settings);
     await this.ensureVaultFolder(folder);
 
-    const ext = rec.fullname?.split('.').pop() ?? 'opus';
-    const audioVaultPath = normalizePath(triadAudioPath(rec, this.plugin.settings, ext));
+    const mp3VaultPath = normalizePath(triadAudioPath(rec, this.plugin.settings, 'mp3'));
+    let bestAudioPath = mp3VaultPath;
 
-    if (!this.plugin.app.vault.getAbstractFileByPath(audioVaultPath)) {
-      const buffer = await this.plugin.plaudClient.downloadAudioBuffer(rec.id);
-      await this.plugin.app.vault.createBinary(audioVaultPath, buffer);
-    }
-
-    // ── Fetch MP3 (always try when original is .opus) ─────────────────────
-    let bestAudioPath = audioVaultPath;
-
-    if (ext === 'opus') {
-      const mp3VaultPath = normalizePath(triadAudioPath(rec, this.plugin.settings, 'mp3'));
-
-      if (this.plugin.app.vault.getAbstractFileByPath(mp3VaultPath)) {
-        bestAudioPath = mp3VaultPath;
-      } else {
-        this.setStatus({
-          state: 'downloading',
-          message: `(${index}/${total}) Fetching MP3 for "${label}"…`,
-          recordingId: rec.id,
-        });
-
-        try {
-          const mp3Url = await this.plugin.plaudClient.getMp3TempUrl(rec.id);
-          if (mp3Url && typeof mp3Url === 'string' && mp3Url.startsWith('http')) {
-            const mp3Buffer = await this.plugin.plaudClient.downloadFromUrl(mp3Url);
-            await this.plugin.app.vault.createBinary(mp3VaultPath, mp3Buffer);
-            bestAudioPath = mp3VaultPath;
-          } else {
-            const buffer = await this.plugin.plaudClient.downloadAudioBuffer(rec.id);
-            const header = new Uint8Array(buffer.slice(0, 3));
-            const isMP3 = (header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33)
-                       || (header[0] === 0xFF && (header[1] & 0xE0) === 0xE0);
-            if (isMP3) {
-              await this.plugin.app.vault.createBinary(mp3VaultPath, buffer);
-              bestAudioPath = mp3VaultPath;
-            }
-          }
-        } catch (dlErr: any) {
-          console.warn(`Plaud: MP3 download failed for ${rec.id}`, dlErr);
-        }
+    if (!this.plugin.app.vault.getAbstractFileByPath(mp3VaultPath)) {
+      this.setStatus({
+        state: 'downloading',
+        message: `(${index}/${total}) Downloading audio for "${label}"…`,
+        recordingId: rec.id,
+      });
+      try {
+        const buffer = await this.plugin.plaudClient.downloadAudioBuffer(rec.id);
+        await this.plugin.app.vault.createBinary(mp3VaultPath, buffer);
+      } catch (dlErr: any) {
+        console.warn(`Plaud: audio download failed for ${rec.id}`, dlErr);
       }
     }
 
@@ -160,27 +124,45 @@ export class SyncManager {
     const detail: PlaudFileDetail = await this.plugin.plaudClient.getRecordingDetail(rec.id);
 
     let transcription: TranscriptionResult;
+    // Structured segments + optional summary for the triad's .json / .summary.md.
+    let segments = detail.segments ?? [];
+    let summaryText = detail.summaryText ?? '';
+    let transcriptSource: 'plaud' | 'macparakeet' | 'none' = segments.length ? 'plaud' : 'none';
+    // macparakeet history id — stored in the note so "Summarise" can run prompts.
+    let parakeetId = '';
 
     if (hasRealTranscript(detail.transcriptText)) {
       transcription = parseServerTranscript(detail.transcriptText!);
-    } else if (bestAudioPath.endsWith('.opus')) {
-      // Still only have the encrypted .opus — can't transcribe
-      transcription = {
-        text: '*(No MP3 version available yet — open this recording in the Plaud app to process it, then re-sync.)*',
-        segments: [],
-      };
-    } else {
+      transcriptSource = 'plaud';
+    } else if (this.plugin.app.vault.getAbstractFileByPath(bestAudioPath)) {
+      // No Plaud transcript — transcribe locally with macparakeet.
       try {
         const vaultBasePath = (this.plugin.app.vault.adapter as any).getBasePath?.() ?? '';
         const audioAbsPath = join(vaultBasePath, bestAudioPath);
-        transcription = await this.plugin.whisperBridge.transcribe(
+        const result = await this.plugin.whisperBridge.transcribeRich(
           audioAbsPath,
           this.plugin.settings,
         );
-      } catch (whisperErr: any) {
-        console.warn(`Plaud: Superwhisper failed for ${rec.id}, creating note without transcript.`, whisperErr);
-        transcription = { text: '*(Superwhisper transcription failed — check the Superwhisper app and recordings folder in settings.)*', segments: [] };
+        transcription = { text: result.text, segments: result.segments.map(s => ({ start: s.start, end: s.end, text: s.text })), language: result.language };
+        segments = result.segments.map(s => ({ start: s.start, end: s.end, text: s.text, speaker: s.speaker }));
+        transcriptSource = 'macparakeet';
+        parakeetId = result.id ?? '';
+
+        // Optionally summarize the fresh transcript via macparakeet + LLM.
+        if (this.plugin.settings.parakeetSummaryEnabled && result.id) {
+          try {
+            this.setStatus({ state: 'transcribing', message: `(${index}/${total}) Summarizing "${label}"…`, recordingId: rec.id });
+            summaryText = await this.plugin.whisperBridge.summarize(result.id, this.plugin.settings);
+          } catch (sumErr: any) {
+            console.warn(`Plaud: macparakeet summary failed for ${rec.id}`, sumErr);
+          }
+        }
+      } catch (mpErr: any) {
+        console.warn(`Plaud: macparakeet failed for ${rec.id}, creating note without transcript.`, mpErr);
+        transcription = { text: '*(macparakeet transcription failed — check `macparakeet-cli health` and that it is installed.)*', segments: [] };
       }
+    } else {
+      transcription = { text: '*(No transcript available — no Plaud transcript and no audio to transcribe.)*', segments: [] };
     }
 
     // ── Create note ───────────────────────────────────────────────────────
@@ -191,27 +173,21 @@ export class SyncManager {
       bestAudioPath,
       this.plugin.settings,
     );
+    // Record the macparakeet transcription id in the note so the Summarise
+    // command can run prompts against it later.
+    if (parakeetId) {
+      await setFrontmatterKey(this.plugin.app.vault, notePath, 'parakeet_id', parakeetId);
+    }
 
-    // ── Store Plaud's structured transcript (JSON) + AI summary (Markdown) ──
-    // When Plaud has a server transcript, persist the speaker-labelled segments
-    // as <ts>.json; when it has an AI summary, persist it as <ts>.summary.md.
-    await writePlaudArtifacts(this.plugin.app.vault, rec, detail, this.plugin.settings);
-
-    // ── Write the AI-result file (only when Superwhisper produced one) ─────
-    // Voice-only results omit `<ts>.llm.md` entirely; the note still carries the
-    // AI-pending flag below so the vault CLAUDE.md flow can offer to process it.
-    await writeLlmSidecar(
+    // ── Store structured transcript (JSON) + AI summary (Markdown) ──────────
+    await writeTranscriptArtifacts(
       this.plugin.app.vault,
-      triadLlmPath(rec, this.plugin.settings),
-      transcription,
+      rec,
+      this.plugin.settings,
+      segments,
+      summaryText,
+      transcriptSource,
     );
-
-    // Flag voice-only Superwhisper results so the vault-access flow can
-    // proactively offer to run AI processing (no llmResult was present).
-    await annotateAiPending(this.plugin.app.vault, notePath, transcription);
-
-    // Note: no context-based rename — triad files are keyed by a stable
-    // timestamp stem (`<ts>.md/.llm.md/.<ext>`) so the three stay grouped.
 
     // Persist dedup
     this.plugin.settings.syncedIds.push(rec.id);
@@ -229,26 +205,27 @@ export class SyncManager {
     const folder = triadFolder(this.plugin.settings);
 
     // Locate the note by scanning frontmatter for plaud_id, then delete the
-    // whole triad (note + audio + optional .llm.md) which shares the note's
-    // timestamp stem in the triad folder.
+    // whole set of files (note + audio + .json + .summary.md) sharing that
+    // note's stem in the triad folder.
     const noteFiles = vault.getMarkdownFiles().filter(f =>
-      f.path.startsWith(folder + '/'),
+      f.path.startsWith(folder + '/') && !f.name.endsWith('.summary.md'),
     );
     let stem: string | null = null;
     for (const file of noteFiles) {
       const cache = this.plugin.app.metadataCache.getFileCache(file);
       if (cache?.frontmatter?.plaud_id === id) {
-        stem = file.basename.replace(/\.llm$/, ''); // note basename is the stem
+        stem = file.basename; // note basename is the stem
         await vault.trash(file, true);
         break;
       }
     }
 
-    // Delete all sibling triad files sharing the stem (audio + .llm.md).
+    // Delete all sibling files sharing the stem: <stem>.<ext>, <stem>.json,
+    // <stem>.summary.md.
     if (stem) {
       const siblings = vault.getFiles().filter(f =>
         f.path.startsWith(folder + '/') &&
-        (f.basename === stem || f.basename === `${stem}.llm`),
+        (f.basename === stem || f.basename === `${stem}.summary`),
       );
       for (const file of siblings) {
         await vault.trash(file, true);
@@ -403,12 +380,6 @@ export class SyncManager {
         }
 
         await vault.modify(file, newContent);
-        await writeLlmSidecar(
-          vault,
-          normalizePath(`${folder}/${stem}.llm.md`),
-          transcription,
-        );
-        await annotateAiPending(vault, file.path, transcription);
         new Notice(`Plaud: re-transcribed "${file.basename}".`);
       } else {
         new Notice('Plaud: no transcript available yet for this recording.');
@@ -419,6 +390,65 @@ export class SyncManager {
     } catch (err: any) {
       console.error(`Plaud: retranscribe failed for ${plaudId}`, err);
       new Notice(`Plaud: re-transcribe error: ${err.message}`);
+      this.setStatus({ state: 'error', message: err.message });
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  /**
+   * Summarise a note with a chosen macparakeet prompt, writing the result to the
+   * triad's `<stem>.summary.md`. Resolves the macparakeet transcription id from
+   * the note's `parakeet_id` frontmatter; if absent (e.g. a Plaud-only note), it
+   * transcribes the triad audio once to obtain an id first.
+   */
+  async summarizeNote(file: TFile, promptName: string): Promise<void> {
+    if (this.isSyncing) {
+      new Notice('Plaud: sync in progress — try again after it finishes.');
+      return;
+    }
+    const vault = this.plugin.app.vault;
+    const folder = triadFolder(this.plugin.settings);
+    const stem = file.basename;
+
+    this.isSyncing = true;
+    this.setStatus({ state: 'transcribing', message: `Summarising "${stem}"…` });
+    try {
+      const cache = this.plugin.app.metadataCache.getFileCache(file);
+      let parakeetId = String(cache?.frontmatter?.parakeet_id ?? '').trim();
+
+      // No id yet — transcribe the triad audio once to get one.
+      if (!parakeetId) {
+        const audio = vault.getFiles().find(f =>
+          f.path.startsWith(folder + '/') && f.basename === stem && f.extension !== 'md' && f.extension !== 'json',
+        );
+        if (!audio) {
+          new Notice('Plaud: no audio found to summarise this note.');
+          return;
+        }
+        const vaultBasePath = (vault.adapter as any).getBasePath?.() ?? '';
+        const absPath = join(vaultBasePath, audio.path);
+        parakeetId = await this.plugin.whisperBridge.transcribeForId(absPath, this.plugin.settings);
+        if (parakeetId) {
+          await setFrontmatterKey(vault, file.path, 'parakeet_id', parakeetId);
+        }
+      }
+      if (!parakeetId) {
+        new Notice('Plaud: could not obtain a macparakeet transcription id.');
+        return;
+      }
+
+      const summary = await this.plugin.whisperBridge.summarize(parakeetId, this.plugin.settings, promptName);
+      if (!summary || summary.trim().length === 0) {
+        new Notice('Plaud: summary produced no output.');
+        return;
+      }
+      await writeFileOverwrite(vault, normalizePath(`${folder}/${stem}.summary.md`), summary.trim() + '\n');
+      new Notice(`Plaud: summarised "${stem}" → ${stem}.summary.md`);
+      this.setStatus({ state: 'idle', message: `Summarised: ${new Date().toLocaleTimeString()}` });
+    } catch (err: any) {
+      console.error('Plaud: summarise failed', err);
+      new Notice(`Plaud: summarise error: ${err.message}`);
       this.setStatus({ state: 'error', message: err.message });
     } finally {
       this.isSyncing = false;
@@ -444,6 +474,7 @@ export class SyncManager {
       'No transcript available',
       'Whisper transcription failed',
       'Superwhisper transcription failed',
+      'macparakeet transcription failed',
     ];
 
     try {
@@ -565,12 +596,6 @@ export class SyncManager {
             );
 
             await vault.modify(file, newContent);
-            await writeLlmSidecar(
-              vault,
-              normalizePath(`${folder}/${file.basename}.llm.md`),
-              transcription,
-            );
-            await annotateAiPending(vault, file.path, transcription);
             transcribed++;
           } else {
             skipped++;
@@ -631,21 +656,19 @@ function parseServerTranscript(raw: string): TranscriptionResult {
  * Each is written only when the corresponding data is present. Files are
  * overwritten so re-syncs pick up updated transcripts/summaries.
  */
-async function writePlaudArtifacts(
+async function writeTranscriptArtifacts(
   vault: Vault,
   rec: PlaudFile,
-  detail: PlaudFileDetail,
   settings: import('../settings').PlaudSettings,
+  segments: Array<{ start: number; end: number; text: string; speaker?: string; original_speaker?: string }>,
+  summaryText: string,
+  source: 'plaud' | 'macparakeet' | 'none',
 ): Promise<void> {
-  const segments = (detail as any).segments as
-    | Array<{ start: number; end: number; text: string; speaker?: string; original_speaker?: string }>
-    | undefined;
-
   if (Array.isArray(segments) && segments.length > 0) {
     const payload = {
       plaud_id: rec.id,
       name: (rec as any).name ?? rec.filename ?? rec.id,
-      source: 'plaud',
+      source,
       segments,
     };
     await writeFileOverwrite(
@@ -655,9 +678,8 @@ async function writePlaudArtifacts(
     );
   }
 
-  const summary = (detail as any).summaryText as string | undefined;
-  if (summary && summary.trim().length > 0) {
-    await writeFileOverwrite(vault, triadSummaryPath(rec, settings), summary.trim() + '\n');
+  if (summaryText && summaryText.trim().length > 0) {
+    await writeFileOverwrite(vault, triadSummaryPath(rec, settings), summaryText.trim() + '\n');
   }
 }
 
@@ -672,77 +694,21 @@ async function writeFileOverwrite(vault: Vault, path: string, body: string): Pro
   }
 }
 
-/**
- * Write the triad's `<ts>.llm.md` sidecar — but only when Superwhisper actually
- * produced an AI result. Voice-only recordings omit the file entirely (per the
- * triad spec); the note's AI-pending flag is what signals "not yet processed".
- *
- * When `llmProcessed` is true the transcription's `text` already holds the
- * `llmResult` (the bridge prefers it), so we persist that here.
- */
-async function writeLlmSidecar(
-  vault: Vault,
-  llmPath: string,
-  transcription: TranscriptionResult,
-): Promise<void> {
-  const llmProcessed = (transcription as { llmProcessed?: boolean }).llmProcessed;
-  if (llmProcessed !== true) return; // omit file for voice-only results
-
-  const text = transcription.text?.trim() ?? '';
-  if (!text || text.startsWith('*(')) return;
-
-  const normalized = normalizePath(llmPath);
-  const existing = vault.getAbstractFileByPath(normalized);
-  const body = `${text}\n`;
-  if (existing instanceof TFile) {
-    await vault.modify(existing, body);
-  } else {
-    await vault.create(normalized, body);
-  }
-}
-
-/**
- * If a transcription came back voice-only (Superwhisper produced no LLM result),
- * mark its note so the vault-access flow can offer to run AI processing.
- *
- * Adds `superwhisper_ai_processed: false` to frontmatter and appends a callout
- * marker. Real transcripts (with an AI result) and placeholder notes are left
- * untouched.
- */
-async function annotateAiPending(
-  vault: Vault,
-  notePath: string,
-  transcription: TranscriptionResult,
-): Promise<void> {
-  // `llmProcessed` only exists on Superwhisper results; server/placeholder
-  // transcripts don't carry it, so this narrows to genuine voice-only cases.
-  const llmProcessed = (transcription as { llmProcessed?: boolean }).llmProcessed;
-  if (llmProcessed !== false) return;
-
-  // Skip placeholder/error transcripts — nothing to AI-process.
-  const text = transcription.text?.trim() ?? '';
-  if (!text || text.startsWith('*(')) return;
-
+/** Set (or replace) a single frontmatter key on a note. */
+async function setFrontmatterKey(vault: Vault, notePath: string, key: string, value: string): Promise<void> {
   const file = vault.getAbstractFileByPath(notePath);
   if (!(file instanceof TFile)) return;
-
   let content = await vault.read(file);
-  if (content.includes(AI_PENDING_MARKER)) return; // idempotent
-
-  // Insert a frontmatter flag if the note has frontmatter.
-  if (content.startsWith('---\n')) {
-    const end = content.indexOf('\n---', 4);
-    if (end !== -1 && !/\nsuperwhisper_ai_processed:/.test(content.slice(0, end))) {
-      content =
-        content.slice(0, end) +
-        '\nsuperwhisper_ai_processed: false' +
-        content.slice(end);
-    }
+  if (!content.startsWith('---\n')) return;
+  const end = content.indexOf('\n---', 4);
+  if (end === -1) return;
+  const head = content.slice(0, end);
+  const line = `${key}: ${value}`;
+  if (new RegExp(`\\n${key}:`).test(head)) {
+    content = head.replace(new RegExp(`\\n${key}:[^\\n]*`), `\n${line}`) + content.slice(end);
+  } else {
+    content = head + `\n${line}` + content.slice(end);
   }
-
-  // Append the human-readable marker at the end.
-  content = content.replace(/\s*$/, '\n\n') + AI_PENDING_MARKER + '\n';
-
   await vault.modify(file, content);
 }
 

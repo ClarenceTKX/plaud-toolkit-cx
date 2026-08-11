@@ -1,16 +1,19 @@
+import { recordingStem } from '@plaud/core';
 import type { PlaudFile } from '../types';
 import type { PlaudSettings } from '../settings';
 
 /**
- * A recording's "triad" lives as three files sharing one timestamp stem in a
- * single flat folder (`settings.triadFolder`):
+ * A recording's "triad" lives as files sharing one stem in a single flat folder
+ * (`settings.triadFolder`):
  *
- *   <ts>.md        transcript note
- *   <ts>.<ext>     audio passed to Superwhisper (e.g. mp3/wav)
- *   <ts>.llm.md    AI result — written only when Superwhisper produced one
+ *   <stem>.md          transcript note
+ *   <stem>.<ext>       audio (e.g. mp3)
+ *   <stem>.json        transcript (speaker-labelled segments; Plaud or macparakeet)
+ *   <stem>.summary.md  AI summary (Plaud's, or macparakeet + LLM) — only when present
  *
- * Keying by a stable per-recording timestamp keeps the three grouped together
- * and guarantees uniqueness without per-recording subfolders.
+ * The stem is the shared `recordingStem` from @plaud/core, so the Obsidian
+ * plugin and the CLI produce identical filenames for the same recording (no
+ * duplicate file sets).
  */
 
 /** The folder that holds all triads. */
@@ -19,18 +22,9 @@ export function triadFolder(settings: PlaudSettings): string {
   return f || '__Support/Plaud';
 }
 
-/**
- * Stable, unique stem for a recording's triad files. Uses the recording's
- * start time as epoch-milliseconds (Superwhisper itself names folders this way),
- * falling back to the recording id if the timestamp is unusable.
- */
+/** Shared, readable stem (`<date>_<slug>`) — identical to the CLI's. */
 export function triadStem(rec: PlaudFile): string {
-  const ms = Number(rec.start_time);
-  if (Number.isFinite(ms) && ms > 0) {
-    return String(Math.floor(ms));
-  }
-  // Fallback: sanitize the id so it's filename-safe.
-  return String(rec.id).replace(/[^\w-]/g, '_');
+  return recordingStem(rec);
 }
 
 /** `<triadFolder>/<ts>.md` — the transcript note path. */
@@ -46,11 +40,6 @@ export function triadAudioPath(
 ): string {
   const clean = (ext || 'mp3').replace(/^\./, '');
   return `${triadFolder(settings)}/${triadStem(rec)}.${clean}`;
-}
-
-/** `<triadFolder>/<ts>.llm.md` — the AI-result path (only written when present). */
-export function triadLlmPath(rec: PlaudFile, settings: PlaudSettings): string {
-  return `${triadFolder(settings)}/${triadStem(rec)}.llm.md`;
 }
 
 /**

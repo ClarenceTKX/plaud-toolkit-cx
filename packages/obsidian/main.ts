@@ -7,6 +7,7 @@ import { NoteFactory } from './src/notes/NoteFactory';
 import { SyncManager } from './src/sync/SyncManager';
 import { SettingsTab } from './src/ui/SettingsTab';
 import { RecordingsView, RECORDINGS_VIEW_TYPE } from './src/ui/RecordingsView';
+import { PromptSuggestModal } from './src/ui/PromptSuggestModal';
 
 export default class PlaudPlugin extends Plugin {
   settings: PlaudSettings;
@@ -86,6 +87,21 @@ export default class PlaudPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'summarise-current',
+      name: 'Summarise current note (macparakeet prompt)',
+      checkCallback: (checking: boolean) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        const cache = this.app.metadataCache.getFileCache(file);
+        if (!cache?.frontmatter?.plaud_id) return false; // only Plaud notes
+        if (!checking) {
+          void this.summariseCurrentNote(file);
+        }
+        return true;
+      },
+    });
+
     // Start background sync
     this.syncManager.start();
   }
@@ -123,5 +139,26 @@ export default class PlaudPlugin extends Plugin {
     for (const leaf of leaves) {
       (leaf.view as RecordingsView).refresh();
     }
+  }
+
+  /**
+   * Fetch macparakeet's saved prompts, let the user pick one, then summarise the
+   * note into its `<stem>.summary.md`.
+   */
+  private async summariseCurrentNote(file: import('obsidian').TFile): Promise<void> {
+    let prompts;
+    try {
+      prompts = await this.whisperBridge.listPrompts();
+    } catch (err: any) {
+      new Notice(`Plaud: couldn't load macparakeet prompts: ${err?.message ?? err}`, 8000);
+      return;
+    }
+    if (!prompts || prompts.length === 0) {
+      new Notice('Plaud: no macparakeet prompts found. Configure them in the MacParakeet app.');
+      return;
+    }
+    new PromptSuggestModal(this.app, prompts, (promptName) => {
+      void this.syncManager.summarizeNote(file, promptName);
+    }).open();
   }
 }

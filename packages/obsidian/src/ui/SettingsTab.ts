@@ -71,55 +71,82 @@ export class SettingsTab extends PluginSettingTab {
         .setDisabled(true),
       );
 
-    // ── Transcription (Superwhisper) ─────────────────────────────────────────
+    // ── Transcription (macparakeet) ──────────────────────────────────────────
     containerEl.createEl('h2', { text: 'Transcription' });
 
-    const swHelp = containerEl.createEl('p', { cls: 'setting-item-description' });
-    swHelp.innerHTML =
-      'Local transcription is handled on-device by <a href="https://superwhisper.com">Superwhisper</a>. ' +
-      'Recordings are transcribed with Superwhisper’s <b>currently active mode</b>, so language and model ' +
-      'are chosen there rather than here. Requires the Superwhisper macOS app to be installed and running.';
+    const mpHelp = containerEl.createEl('p', { cls: 'setting-item-description' });
+    mpHelp.innerHTML =
+      'When Plaud has no server transcript, recordings are transcribed on-device by ' +
+      '<a href="https://macparakeet.com">macparakeet</a> (Parakeet TDT). Install the CLI: ' +
+      '<code>brew install moona3k/tap/macparakeet-cli</code>. Runs fully locally with speaker labels.';
 
     new Setting(containerEl)
-      .setName('Superwhisper recordings folder')
-      .setDesc(
-        'Absolute path to Superwhisper’s recordings folder. Leave empty to auto-detect ' +
-          '(~/superwhisper/recordings, then ~/Documents/superwhisper/recordings).',
-      )
-      .addText(text => text
-        .setPlaceholder('~/superwhisper/recordings')
-        .setValue(this.plugin.settings.superwhisperRecordingsPath ?? '')
-        .onChange(async value => {
-          this.plugin.settings.superwhisperRecordingsPath = value.trim();
-          await this.plugin.saveSettings();
-        }),
-      )
+      .setName('macparakeet status')
+      .setDesc('Check that macparakeet-cli is installed and its speech model is ready.')
       .addButton(btn => btn
         .setButtonText('Check')
         .onClick(async () => {
           btn.setDisabled(true);
-          const err = await this.plugin.whisperBridge.checkInstallation(
-            this.plugin.settings,
-          );
+          const err = await this.plugin.whisperBridge.checkInstallation(this.plugin.settings);
           btn.setDisabled(false);
-          if (err) {
-            new Notice(`Superwhisper check failed:\n${err}`, 8000);
-          } else {
-            new Notice('Superwhisper is installed and reachable!');
-          }
+          if (err) new Notice(`macparakeet check failed:\n${err}`, 8000);
+          else new Notice('macparakeet-cli is installed and ready!');
         }),
       );
 
     new Setting(containerEl)
-      .setName('Transcription timeout (minutes)')
-      .setDesc('How long to wait for Superwhisper to finish transcribing before giving up.')
+      .setName('Speaker count (optional)')
+      .setDesc('Exact number of speakers for diarization. Leave empty to auto-detect.')
       .addText(text => text
-        .setPlaceholder('10')
-        .setValue(String(this.plugin.settings.superwhisperTimeoutMinutes ?? 10))
+        .setPlaceholder('auto')
+        .setValue(this.plugin.settings.parakeetSpeakerCount ? String(this.plugin.settings.parakeetSpeakerCount) : '')
         .onChange(async value => {
           const n = Number(value.trim());
-          this.plugin.settings.superwhisperTimeoutMinutes =
-            Number.isFinite(n) && n > 0 ? n : 10;
+          this.plugin.settings.parakeetSpeakerCount = Number.isFinite(n) && n > 0 ? n : undefined;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    // ── AI Summary (macparakeet prompts → LLM) ───────────────────────────────
+    containerEl.createEl('h2', { text: 'AI Summary' });
+
+    const sumHelp = containerEl.createEl('p', { cls: 'setting-item-description' });
+    sumHelp.innerHTML =
+      'Optionally generate an AI summary for locally-transcribed recordings via macparakeet’s ' +
+      'prompt library. This calls an LLM provider (Anthropic) and needs <code>ANTHROPIC_API_KEY</code> ' +
+      'set in your environment. Off by default. Recordings that already have a Plaud summary use that instead.';
+
+    new Setting(containerEl)
+      .setName('Generate AI summaries')
+      .setDesc('Run a summary prompt on macparakeet transcripts (requires ANTHROPIC_API_KEY).')
+      .addToggle(t => t
+        .setValue(this.plugin.settings.parakeetSummaryEnabled)
+        .onChange(async value => {
+          this.plugin.settings.parakeetSummaryEnabled = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Summary prompt')
+      .setDesc('macparakeet prompt name to run (e.g. "Summary", "Action Items & Decisions").')
+      .addText(text => text
+        .setPlaceholder('Summary')
+        .setValue(this.plugin.settings.parakeetSummaryPrompt)
+        .onChange(async value => {
+          this.plugin.settings.parakeetSummaryPrompt = value.trim() || 'Summary';
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('Summary model')
+      .setDesc('Anthropic model id for summaries.')
+      .addText(text => text
+        .setPlaceholder('claude-sonnet-4-6')
+        .setValue(this.plugin.settings.parakeetSummaryModel)
+        .onChange(async value => {
+          this.plugin.settings.parakeetSummaryModel = value.trim() || 'claude-sonnet-4-6';
           await this.plugin.saveSettings();
         }),
       );
@@ -128,11 +155,11 @@ export class SettingsTab extends PluginSettingTab {
     containerEl.createEl('h2', { text: 'Storage' });
 
     new Setting(containerEl)
-      .setName('Triad folder')
+      .setName('Storage folder')
       .setDesc(
-        'Single vault folder holding each recording’s triad — the transcript note ' +
-          '(<timestamp>.md), the audio passed to Superwhisper (<timestamp>.<ext>), and, ' +
-          'when Superwhisper produced one, the AI result (<timestamp>.llm.md).',
+        'Single vault folder holding each recording’s files under a shared ' +
+          '<date>_<slug> stem: the note (.md), audio (.mp3), transcript (.json), ' +
+          'and AI summary (.summary.md, when available).',
       )
       .addText(text => text
         .setPlaceholder('__Support/Plaud')

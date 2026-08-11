@@ -4,28 +4,31 @@ import {
   triadStem,
   triadNotePath,
   triadAudioPath,
-  triadLlmPath,
+  triadTranscriptJsonPath,
+  triadSummaryPath,
 } from '../src/notes/triad';
 import type { PlaudSettings } from '../src/settings';
 
 const settings = { triadFolder: '__Support/Plaud' } as PlaudSettings;
-const rec = { id: 'abc123', start_time: 1786344425271 } as any;
+const rec = {
+  id: 'abc123',
+  name: 'Q2 Review',
+  start_at: '2026-04-01T12:00:00',
+  created_at: '2026-04-01T13:00:00',
+} as any;
+const STEM = '2026-04-01_Q2_Review';
 
 describe('triad paths', () => {
-  it('uses start_time epoch-ms as the stem', () => {
-    expect(triadStem(rec)).toBe('1786344425271');
+  it('uses the shared <date>_<slug> stem', () => {
+    expect(triadStem(rec)).toBe(STEM);
   });
 
-  it('falls back to a sanitized id when start_time is unusable', () => {
-    expect(triadStem({ id: 'a/b c', start_time: NaN } as any)).toBe('a_b_c');
-    expect(triadStem({ id: 'x', start_time: 0 } as any)).toBe('x');
-  });
-
-  it('builds note/audio/llm paths sharing one folder + stem', () => {
-    expect(triadNotePath(rec, settings)).toBe('__Support/Plaud/1786344425271.md');
-    expect(triadAudioPath(rec, settings, 'mp3')).toBe('__Support/Plaud/1786344425271.mp3');
-    expect(triadAudioPath(rec, settings, '.wav')).toBe('__Support/Plaud/1786344425271.wav');
-    expect(triadLlmPath(rec, settings)).toBe('__Support/Plaud/1786344425271.llm.md');
+  it('builds note/audio/json/summary paths sharing one folder + stem', () => {
+    expect(triadNotePath(rec, settings)).toBe(`__Support/Plaud/${STEM}.md`);
+    expect(triadAudioPath(rec, settings, 'mp3')).toBe(`__Support/Plaud/${STEM}.mp3`);
+    expect(triadAudioPath(rec, settings, '.wav')).toBe(`__Support/Plaud/${STEM}.wav`);
+    expect(triadTranscriptJsonPath(rec, settings)).toBe(`__Support/Plaud/${STEM}.json`);
+    expect(triadSummaryPath(rec, settings)).toBe(`__Support/Plaud/${STEM}.summary.md`);
   });
 
   it('defaults the folder when unset', () => {
@@ -35,6 +38,6 @@ describe('triad paths', () => {
   });
 
   it('defaults a missing audio ext to mp3', () => {
-    expect(triadAudioPath(rec, settings, '')).toBe('__Support/Plaud/1786344425271.mp3');
+    expect(triadAudioPath(rec, settings, '')).toBe(`__Support/Plaud/${STEM}.mp3`);
   });
 });

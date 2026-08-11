@@ -3,18 +3,18 @@ export { PlaudClient } from './client.js';
 export { PlaudConfig } from './config.js';
 export { fetchRequester, BASE_URLS } from './types.js';
 export type * from './types.js';
+export { recordingStem, slugify } from './naming.js';
 export {
-  SuperwhisperBridge,
-  transcriptionFromMeta,
-  mapSegments,
-  resolveRecordingsDir,
-} from './superwhisper.js';
+  ParakeetBridge,
+  ParakeetError,
+  parseTranscription,
+  mapParakeetSegments,
+} from './parakeet.js';
 export type {
-  SuperwhisperOptions,
-  SuperwhisperTranscription,
-  SuperwhisperMeta,
-  SuperwhisperMetaInfo,
-  SuperwhisperSegment,
-  WhisperSegment,
-  TranscriptionResult,
-} from './superwhisper.js';
+  ParakeetSegment,
+  ParakeetTranscription,
+  ParakeetHealth,
+  ParakeetPrompt,
+  TranscribeOptions,
+  SummaryOptions,
+} from './parakeet.js';

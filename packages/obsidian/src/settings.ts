@@ -6,31 +6,38 @@ export interface PlaudSettings {
    */
   plaudRegion?: 'us' | 'eu';
   /**
-   * Absolute path to Superwhisper's recordings folder. Superwhisper writes one
-   * timestamped subfolder per transcription, each containing a `meta.json`.
-   * Empty means auto-detect (~/superwhisper/recordings, then the legacy
-   * ~/Documents/superwhisper/recordings).
+   * When Plaud has no server transcript, transcribe locally with
+   * `macparakeet-cli` (Parakeet TDT). Exact speaker count for diarization
+   * (0/undefined → let macparakeet auto-detect).
    */
-  superwhisperRecordingsPath: string;
-  /** Max minutes to wait for Superwhisper to finish a transcription. */
-  superwhisperTimeoutMinutes: number;
+  parakeetSpeakerCount?: number;
   /**
-   * Single shared vault folder that holds each recording's "triad": the
-   * transcript note (`<ts>.md`), the audio passed to Superwhisper (`<ts>.<ext>`),
-   * and — only when Superwhisper produced one — the AI result (`<ts>.llm.md`).
-   * Files are keyed by a per-recording timestamp stem so the three group
-   * together in one flat folder.
+   * Generate an AI summary for locally-transcribed recordings via macparakeet's
+   * prompt library (`prompts run`). Off by default — it calls an LLM provider.
+   */
+  parakeetSummaryEnabled: boolean;
+  /** macparakeet prompt name to run for the summary (e.g. "Summary"). */
+  parakeetSummaryPrompt: string;
+  /** LLM model id for summaries, e.g. "claude-sonnet-4-6". */
+  parakeetSummaryModel: string;
+  /**
+   * Single shared vault folder that holds each recording's files, keyed by a
+   * shared `<date>_<slug>` stem: `<stem>.md` note, `<stem>.<ext>` audio,
+   * `<stem>.json` transcript, `<stem>.summary.md` AI summary.
    */
   triadFolder: string;
   /**
-   * @deprecated Superwhisper is driven by its active *mode*, not CLI flags.
-   * Retained so existing user data loads without loss; no longer used by the
-   * transcription bridge.
+   * @deprecated Superwhisper is no longer used; local transcription is
+   * macparakeet. Kept optional so existing data.json still loads.
    */
+  superwhisperRecordingsPath?: string;
+  /** @deprecated Superwhisper timeout — no longer used. */
+  superwhisperTimeoutMinutes?: number;
+  /** @deprecated legacy mlx_whisper path. */
   pythonPath?: string;
-  /** @deprecated See `pythonPath`. Mode selection now controls the model. */
+  /** @deprecated legacy whisper model. */
   whisperModel?: string;
-  /** @deprecated See `pythonPath`. Language is governed by the active mode. */
+  /** @deprecated legacy whisper language. */
   whisperLanguage?: string;
   audioFolder: string;
   notesFolder: string;
@@ -40,8 +47,9 @@ export interface PlaudSettings {
 }
 
 export const DEFAULT_SETTINGS: PlaudSettings = {
-  superwhisperRecordingsPath: '',
-  superwhisperTimeoutMinutes: 10,
+  parakeetSummaryEnabled: false,
+  parakeetSummaryPrompt: 'Summary',
+  parakeetSummaryModel: 'claude-sonnet-4-6',
   triadFolder: '__Support/Plaud',
   audioFolder: 'Plaud/Audio',
   notesFolder: 'Plaud/Notes',
