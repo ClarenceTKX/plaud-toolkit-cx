@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { existsSync } from 'fs';
+import { homedir } from 'os';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +16,34 @@ const execFileAsync = promisify(execFile);
  */
 
 const CLI = 'macparakeet-cli';
+
+/**
+ * Absolute locations to try for the macparakeet-cli binary, in priority order.
+ * GUI apps (Obsidian) don't inherit the shell's PATH, so a bare
+ * `macparakeet-cli` — even when symlinked into /usr/local/bin — won't resolve.
+ * Resolving an absolute path first makes it work regardless of the launch env.
+ */
+const CLI_CANDIDATE_PATHS = [
+  '/usr/local/bin/macparakeet-cli',
+  '/opt/homebrew/bin/macparakeet-cli',
+  '/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli',
+  `${homedir()}/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli`,
+];
+
+/** Extra dirs prepended to PATH so a resolved binary's own lookups (ffmpeg, claude) work. */
+const EXTRA_PATH_DIRS = ['/usr/local/bin', '/opt/homebrew/bin', `${homedir()}/.local/bin`];
+
+/** Resolve an absolute macparakeet-cli path, or fall back to the bare command. */
+function resolveCli(preferred?: string): string {
+  if (preferred && preferred !== CLI) {
+    // An explicit path/command was provided — trust it.
+    return preferred;
+  }
+  for (const p of CLI_CANDIDATE_PATHS) {
+    if (existsSync(p)) return p;
+  }
+  return CLI; // last resort: rely on PATH
+}
 
 // ── Result types ─────────────────────────────────────────────────────────────
 
@@ -108,7 +138,10 @@ export class ParakeetError extends Error {
 // ── Bridge ───────────────────────────────────────────────────────────────────
 
 export class ParakeetBridge {
-  constructor(private cli: string = CLI) {}
+  private cli: string;
+  constructor(cli?: string) {
+    this.cli = resolveCli(cli);
+  }
 
   /**
    * Probe model/db/binary readiness. Returns `{ok:false, reason}` rather than
@@ -243,10 +276,19 @@ export class ParakeetBridge {
     args: string[],
     opts: { maxBuffer?: number } = {},
   ): Promise<{ stdout: string; stderr: string }> {
+    // GUI apps (Obsidian) start with a minimal PATH; add the common tool dirs so
+    // the CLI's own subprocess lookups (ffmpeg, `claude` for cli-provider
+    // summaries) resolve.
+    const env = {
+      ...process.env,
+      HOME: process.env.HOME ?? homedir(),
+      PATH: `${EXTRA_PATH_DIRS.join(':')}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+    };
     try {
       const { stdout, stderr } = await execFileAsync(this.cli, args, {
         maxBuffer: opts.maxBuffer ?? 16 * 1024 * 1024,
         timeout: 30 * 60_000, // 30 min ceiling for long recordings
+        env,
       });
       return { stdout, stderr };
     } catch (err: any) {
@@ -255,9 +297,9 @@ export class ParakeetBridge {
       if (err?.stdout) {
         // After arg-parsing succeeds, failures come back as a JSON envelope on stdout.
         try {
-          const env = JSON.parse(err.stdout);
-          if (env && env.ok === false) {
-            throw new ParakeetError(env.error ?? 'macparakeet error', code, env.errorType, env.fix);
+          const envelope = JSON.parse(err.stdout);
+          if (envelope && envelope.ok === false) {
+            throw new ParakeetError(envelope.error ?? 'macparakeet error', code, envelope.errorType, envelope.fix);
           }
         } catch {
           /* not JSON — fall through */
@@ -265,7 +307,8 @@ export class ParakeetBridge {
       }
       if (err?.code === 'ENOENT') {
         throw new ParakeetError(
-          `macparakeet-cli not found. Install it: brew install moona3k/tap/macparakeet-cli`,
+          `macparakeet-cli not found (tried ${this.cli}). Install it (brew install ` +
+            `moona3k/tap/macparakeet-cli) or ensure the MacParakeet app is in /Applications.`,
           null,
           'not_installed',
         );
