@@ -1,7 +1,7 @@
 {
   "name": "@plaud/obsidian",
   "version": "1.0.0",
-  "description": "Sync and transcribe Plaud Pin recordings in Obsidian",
+  "description": "Sync and transcribe Plaud recordings in Obsidian (Plaud Toolkit)",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

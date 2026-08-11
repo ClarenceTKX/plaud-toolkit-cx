@@ -1,9 +1,9 @@
 {
   "id": "obsidian-plaud",
-  "name": "Plaud Pin Sync",
+  "name": "Plaud Toolkit",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
-  "description": "Sync audio recordings from Plaud Pin, transcribe on-device with Superwhisper, and create structured notes.",
+  "description": "Sync recordings from Plaud, transcribe on-device with macparakeet, and create structured notes with speaker labels and AI summaries.",
   "author": "",
   "authorUrl": "",
   "fundingUrl": "",

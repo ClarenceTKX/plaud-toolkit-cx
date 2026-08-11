@@ -46,7 +46,7 @@ export class RecordingsView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'Plaud Recordings';
+    return 'Plaud Toolkit';
   }
 
   getIcon(): string {
@@ -60,7 +60,7 @@ export class RecordingsView extends ItemView {
 
     // Header
     const header = container.createDiv('plaud-header');
-    header.createEl('h4', { text: 'Plaud Recordings' });
+    header.createEl('h4', { text: 'Plaud Toolkit' });
 
     const btnRow = header.createDiv('plaud-btn-row');
 

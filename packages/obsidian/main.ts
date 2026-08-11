@@ -45,7 +45,7 @@ export default class PlaudPlugin extends Plugin {
     );
 
     // Ribbon icon
-    this.addRibbonIcon('mic', 'Plaud recordings', () => {
+    this.addRibbonIcon('mic', 'Plaud Toolkit', () => {
       this.activateView();
     });
 

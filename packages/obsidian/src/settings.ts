@@ -69,7 +69,8 @@ title: "{{title}}"
 date: "{{date}}"
 time: {{time}}
 duration: "{{duration}}"
-source: plaud_pin
+source: plaud_toolkit
+device: "Plaud Note Pro"
 audio: "[[{{audio_path}}]]"
 tags: [voice-note, transcription]
 ---
