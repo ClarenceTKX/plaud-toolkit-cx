@@ -1,6 +1,7 @@
 import { ItemView, WorkspaceLeaf, TFile, Modal, Setting, setIcon } from 'obsidian';
 import type PlaudPlugin from '../../main';
 import type { SyncStatus } from '../types';
+import { triadFolder } from '../notes/triad';
 
 export const RECORDINGS_VIEW_TYPE = 'plaud-recordings';
 
@@ -12,6 +13,8 @@ const PENDING_MARKERS = [
   'No MP3 version available yet',
   'No transcript available',
   'Whisper transcription failed',
+  'Superwhisper transcription failed',
+  'macparakeet transcription failed',
 ];
 
 interface RowData {
@@ -126,10 +129,13 @@ export class RecordingsView extends ItemView {
   }
 
   private buildRowData(): RowData[] {
-    const { syncedIds, notesFolder } = this.plugin.settings;
+    const { syncedIds } = this.plugin.settings;
+    const folder = triadFolder(this.plugin.settings);
 
+    // Notes live in the triad folder under a <date>_<slug> stem. Exclude the
+    // `.summary.md` sidecars (they aren't notes and have no plaud_id).
     const noteFiles = this.app.vault.getMarkdownFiles().filter(f =>
-      f.path.startsWith(notesFolder + '/'),
+      f.path.startsWith(folder + '/') && !f.name.endsWith('.summary.md'),
     );
     const noteIndex: Map<string, TFile> = new Map();
     for (const file of noteFiles) {
