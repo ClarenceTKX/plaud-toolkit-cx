@@ -45,11 +45,15 @@ export class WhisperBridge {
     return toTranscriptionResult(await this.transcribeRich(audioAbsPath, settings));
   }
 
-  /** Run a macparakeet summary prompt against a transcription id (LLM-backed). */
+  /**
+   * Run a macparakeet summary prompt against a transcription id. Defaults to the
+   * local `cli` provider (Claude Code, `claude -p`) — no API key needed.
+   */
   async summarize(transcriptionId: string, settings: PlaudSettings, promptName?: string): Promise<string> {
     return this.core.summarize(transcriptionId, {
       promptName: promptName ?? settings.parakeetSummaryPrompt,
-      provider: 'anthropic',
+      provider: settings.parakeetSummaryProvider || 'cli',
+      command: settings.parakeetSummaryCommand || 'claude -p',
       apiKeyEnv: 'ANTHROPIC_API_KEY',
       model: settings.parakeetSummaryModel,
     });

@@ -18,7 +18,14 @@ export interface PlaudSettings {
   parakeetSummaryEnabled: boolean;
   /** macparakeet prompt name to run for the summary (e.g. "Summary"). */
   parakeetSummaryPrompt: string;
-  /** LLM model id for summaries, e.g. "claude-sonnet-4-6". */
+  /**
+   * macparakeet summary provider. Default "cli" runs a local command (Claude
+   * Code) with no API key; "anthropic" etc. use a hosted key.
+   */
+  parakeetSummaryProvider: string;
+  /** Command for the "cli" provider (default "claude -p"). */
+  parakeetSummaryCommand: string;
+  /** Model id for hosted providers (ignored by the cli provider). */
   parakeetSummaryModel: string;
   /**
    * Single shared vault folder that holds each recording's files, keyed by a
@@ -49,7 +56,9 @@ export interface PlaudSettings {
 export const DEFAULT_SETTINGS: PlaudSettings = {
   parakeetSummaryEnabled: false,
   parakeetSummaryPrompt: 'Summary',
-  parakeetSummaryModel: 'claude-sonnet-4-6',
+  parakeetSummaryProvider: 'cli',
+  parakeetSummaryCommand: 'claude -p',
+  parakeetSummaryModel: 'claude-sonnet-5',
   triadFolder: '__Support/Plaud',
   audioFolder: 'Plaud/Audio',
   notesFolder: 'Plaud/Notes',

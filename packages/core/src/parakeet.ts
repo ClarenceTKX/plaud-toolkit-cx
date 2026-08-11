@@ -76,11 +76,19 @@ export interface ParakeetPrompt {
 export interface SummaryOptions {
   /** Prompt library entry name, e.g. "Summary", "Action Items & Decisions". */
   promptName?: string;
-  /** LLM provider (default "anthropic"). */
+  /**
+   * macparakeet provider: anthropic, openai, ollama, cli, … Defaults to "cli",
+   * which runs summaries through a local command (Claude Code) with no API key.
+   */
   provider?: string;
-  /** Env var holding the API key (default "ANTHROPIC_API_KEY"). */
+  /**
+   * Command for the `cli` provider (default "claude -p"). Ignored for other
+   * providers.
+   */
+  command?: string;
+  /** Env var holding the API key — only for hosted providers (anthropic, etc.). */
   apiKeyEnv?: string;
-  /** Model id, e.g. "claude-sonnet-4-6". */
+  /** Model id — ignored by the `cli` provider (it reports model "cli"). */
   model?: string;
 }
 
@@ -172,18 +180,24 @@ export class ParakeetBridge {
     options: SummaryOptions = {},
   ): Promise<string> {
     const promptName = options.promptName ?? 'Summary';
-    const provider = options.provider ?? 'anthropic';
-    const apiKeyEnv = options.apiKeyEnv ?? 'ANTHROPIC_API_KEY';
-    const model = options.model;
+    // Default to the local `cli` provider running Claude Code (`claude -p`) — no
+    // API key required. Hosted providers (anthropic, …) use an env-var key.
+    const provider = options.provider ?? 'cli';
 
     const args = [
       'prompts', 'run', promptName,
       '--transcription', transcriptionId,
       '--provider', provider,
-      '--api-key-env', apiKeyEnv,
       '--json',
     ];
-    if (model) args.push('--model', model);
+
+    if (provider === 'cli') {
+      args.push('--command', options.command ?? 'claude -p');
+      args.push('--local');
+    } else {
+      args.push('--api-key-env', options.apiKeyEnv ?? 'ANTHROPIC_API_KEY');
+      if (options.model) args.push('--model', options.model);
+    }
 
     const { stdout } = await this.run(args, { maxBuffer: 32 * 1024 * 1024 });
     let env: any;

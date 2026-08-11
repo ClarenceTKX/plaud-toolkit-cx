@@ -113,12 +113,13 @@ export class SettingsTab extends PluginSettingTab {
     const sumHelp = containerEl.createEl('p', { cls: 'setting-item-description' });
     sumHelp.innerHTML =
       'Optionally generate an AI summary for locally-transcribed recordings via macparakeet’s ' +
-      'prompt library. This calls an LLM provider (Anthropic) and needs <code>ANTHROPIC_API_KEY</code> ' +
-      'set in your environment. Off by default. Recordings that already have a Plaud summary use that instead.';
+      'prompt library. By default this runs through <b>Claude Code</b> (<code>claude -p</code>) — no API key. ' +
+      'Off by default. Recordings that already have a Plaud summary use that instead. ' +
+      'You can also summarise any note on demand via the “Summarise current note” command.';
 
     new Setting(containerEl)
-      .setName('Generate AI summaries')
-      .setDesc('Run a summary prompt on macparakeet transcripts (requires ANTHROPIC_API_KEY).')
+      .setName('Generate AI summaries on sync')
+      .setDesc('Run a summary prompt on macparakeet transcripts during sync.')
       .addToggle(t => t
         .setValue(this.plugin.settings.parakeetSummaryEnabled)
         .onChange(async value => {
@@ -140,13 +141,25 @@ export class SettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Summary model')
-      .setDesc('Anthropic model id for summaries.')
+      .setName('Summary provider')
+      .setDesc('“cli” runs a local command (Claude Code) with no API key. Or a hosted provider (anthropic, openai, ollama…).')
       .addText(text => text
-        .setPlaceholder('claude-sonnet-4-6')
-        .setValue(this.plugin.settings.parakeetSummaryModel)
+        .setPlaceholder('cli')
+        .setValue(this.plugin.settings.parakeetSummaryProvider)
         .onChange(async value => {
-          this.plugin.settings.parakeetSummaryModel = value.trim() || 'claude-sonnet-4-6';
+          this.plugin.settings.parakeetSummaryProvider = value.trim() || 'cli';
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName('CLI command')
+      .setDesc('Command for the “cli” provider (default: claude -p).')
+      .addText(text => text
+        .setPlaceholder('claude -p')
+        .setValue(this.plugin.settings.parakeetSummaryCommand)
+        .onChange(async value => {
+          this.plugin.settings.parakeetSummaryCommand = value.trim() || 'claude -p';
           await this.plugin.saveSettings();
         }),
       );

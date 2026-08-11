@@ -23,17 +23,21 @@ export async function syncCommand(args: string[]): Promise<void> {
   const positional: string[] = [];
   let summarize = false;
   let promptName = 'Summary';
-  let model = 'claude-sonnet-4-6';
+  let provider = 'cli';
+  let command = 'claude -p';
+  let model = 'claude-sonnet-5';
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--summarize' || a === '--summarise') summarize = true;
     else if (a === '--prompt') promptName = args[++i] ?? promptName;
+    else if (a === '--provider') provider = args[++i] ?? provider;
+    else if (a === '--command') command = args[++i] ?? command;
     else if (a === '--model') model = args[++i] ?? model;
     else positional.push(a);
   }
   const folder = positional[0];
   if (!folder) {
-    console.error('Usage: plaud sync <folder> [--summarize] [--prompt <name>] [--model <id>]');
+    console.error('Usage: plaud sync <folder> [--summarize] [--prompt <name>] [--provider <p>] [--command <cmd>] [--model <id>]');
     process.exit(1);
   }
 
@@ -79,8 +83,8 @@ export async function syncCommand(args: string[]): Promise<void> {
 
           if (summarize && result.id) {
             try {
-              console.log(`  Summarizing with "${promptName}"…`);
-              summaryText = await parakeet.summarize(result.id, { promptName, model });
+              console.log(`  Summarizing with "${promptName}" (${provider})…`);
+              summaryText = await parakeet.summarize(result.id, { promptName, provider, command, model });
             } catch (sumErr: any) {
               console.warn(`  Summary failed: ${sumErr?.message ?? sumErr}`);
             }
